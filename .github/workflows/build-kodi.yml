@@ -102,14 +102,14 @@ jobs:
         uses: actions/cache@v5
         id: ndk-cache
         with:
-          path: ~/android-ndk-r26d
-          key: ndk-r26d-linux
+          path: ~/android-ndk-r28c
+          key: ndk-r28c-linux
 
       - name: Download Android NDK
         if: steps.ndk-cache.outputs.cache-hit != 'true'
         run: |
-          echo "⬇️ Downloading NDK r26d..."
-          curl -fsSL https://dl.google.com/android/repository/android-ndk-r26d-linux.zip \
+          echo "⬇️ Downloading NDK r28c..."
+          curl -fsSL https://dl.google.com/android/repository/android-ndk-r28c-linux.zip \
             -o /tmp/ndk.zip
           unzip -q /tmp/ndk.zip -d ~/
           rm /tmp/ndk.zip
@@ -267,14 +267,14 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/kodi-depends
-          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v11
+          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v12
 
       - name: Configure and build Kodi depends
         run: |
           DEPENDS_DIR=$HOME/kodi/tools/depends
           DEPENDS_PREFIX=$HOME/kodi-depends
           TARBALLS=$HOME/kodi-tarballs
-          NDK=$HOME/android-ndk-r26d
+          NDK=$HOME/android-ndk-r28c
           HOST=${{ steps.abi.outputs.triplet }}
           SYS_CMAKE=$(which cmake)
           NATIVE_BIN="$DEPENDS_PREFIX/x86_64-linux-gnu-native/bin"
@@ -329,6 +329,7 @@ jobs:
               --with-ndk-api=24 \
               --with-tarballs="$TARBALLS" \
               --prefix="$DEPENDS_PREFIX" \
+              --disable-gplv3 \
               --enable-debug=no
 
             # Place cmake symlink in the native bin for cmakebuildsys
