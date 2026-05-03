@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  sources.xml
+  Pre-configure media sources so they appear on first launch.
+
+  Edit this file in GitHub, then trigger a new build.
+  Full reference: https://kodi.wiki/view/Sources.xml
+-->
+<sources>
+
+  <programs>
+    <default pathversion="1"></default>
+  </programs>
+
+  <video>
+    <default pathversion="1"></default>
+    <!-- Uncomment and edit to add your own sources:
+
+    <source>
+      <name>My NAS Movies</name>
+      <path pathversion="1">smb://192.168.1.100/Movies/</path>
+      <allowsharing>true</allowsharing>
+    </source>
+
+    <source>
+      <name>My NAS TV Shows</name>
+      <path pathversion="1">smb://192.168.1.100/TVShows/</path>
+      <allowsharing>true</allowsharing>
+    </source>
+
+    -->
+  </video>
+
+  <music>
+    <default pathversion="1"></default>
+    <!-- Uncomment and edit:
+    <source>
+      <name>My Music</name>
+      <path pathversion="1">smb://192.168.1.100/Music/</path>
+      <allowsharing>true</allowsharing>
+    </source>
+    -->
+  </music>
+
+  <pictures>
+    <default pathversion="1"></default>
+  </pictures>
+
+  <files>
+    <default pathversion="1"></default>
+  </files>
+
+</sources>

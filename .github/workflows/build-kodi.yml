@@ -1,0 +1,332 @@
+name: 🎬 Build Kodi APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Kodi version to build'
+        required: true
+        default: 'Omega'
+        type: choice
+        options:
+          - Omega
+          - Nexus
+          - Matrix
+          - master
+      abi:
+        description: 'Target device type'
+        required: true
+        default: 'arm64-v8a'
+        type: choice
+        options:
+          - arm64-v8a (modern phones/boxes — recommended)
+          - armeabi-v7a (older 32-bit devices)
+          - x86_64 (emulators / Chromebooks)
+      app_name:
+        description: 'App display name (shown on launcher)'
+        required: true
+        default: 'Kodi'
+      package_id:
+        description: 'Android package ID (change to install alongside official Kodi)'
+        required: true
+        default: 'org.xbmc.kodi'
+      apk_filename:
+        description: 'APK file name (without .apk — leave blank to auto-generate)'
+        required: false
+        default: ''
+      create_release:
+        description: 'Publish as a GitHub Release when done?'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  build:
+    name: Build ${{ github.event.inputs.app_name }} (${{ github.event.inputs.branch }})
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout config repo
+        uses: actions/checkout@v4
+
+      - name: Parse ABI selection
+        id: abi
+        run: |
+          RAW="${{ github.event.inputs.abi }}"
+          ABI="${RAW%% *}"
+          echo "value=$ABI" >> $GITHUB_OUTPUT
+          case "$ABI" in
+            arm64-v8a)   echo "triplet=aarch64-linux-android" >> $GITHUB_OUTPUT ;;
+            armeabi-v7a) echo "triplet=arm-linux-androideabi" >> $GITHUB_OUTPUT ;;
+            x86_64)      echo "triplet=x86_64-linux-android"  >> $GITHUB_OUTPUT ;;
+          esac
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            git cmake ninja-build make nasm python3 \
+            curl unzip zip default-jdk-headless \
+            autoconf libtool pkg-config yasm ccache \
+            libgl1-mesa-dev libgles2-mesa-dev \
+            2>&1 | tail -5
+          echo "✅ System packages installed"
+
+      - name: Cache Android NDK
+        uses: actions/cache@v4
+        id: ndk-cache
+        with:
+          path: ~/android-ndk-r26d
+          key: ndk-r26d-linux
+
+      - name: Download Android NDK
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          echo "⬇️ Downloading NDK r26d..."
+          curl -fsSL https://dl.google.com/android/repository/android-ndk-r26d-linux.zip \
+            -o /tmp/ndk.zip
+          unzip -q /tmp/ndk.zip -d ~/
+          rm /tmp/ndk.zip
+          echo "✅ NDK ready"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
+
+      - name: Cache Kodi source
+        uses: actions/cache@v4
+        with:
+          path: ~/kodi
+          key: kodi-src-${{ github.event.inputs.branch }}-${{ hashFiles('.github/workflows/build-kodi.yml') }}
+
+      - name: Clone / update Kodi source
+        run: |
+          if [ -d ~/kodi/.git ]; then
+            echo "📦 Updating existing source..."
+            git -C ~/kodi fetch origin
+            git -C ~/kodi checkout ${{ github.event.inputs.branch }}
+            git -C ~/kodi pull --ff-only
+          else
+            echo "📦 Cloning Kodi ${{ github.event.inputs.branch }}..."
+            git clone --depth=1 \
+              -b ${{ github.event.inputs.branch }} \
+              https://github.com/xbmc/xbmc ~/kodi
+          fi
+          echo "✅ Source ready ($(git -C ~/kodi rev-parse --short HEAD))"
+
+      - name: Apply custom app name
+        if: github.event.inputs.app_name != 'Kodi'
+        run: |
+          APP="${{ github.event.inputs.app_name }}"
+          echo "🎨 Renaming app to: $APP"
+          find ~/kodi/tools/android/packaging -type f -name "*.xml" -o -name "*.gradle" | \
+            xargs sed -i "s|>Kodi<|>$APP<|g; s|\"Kodi\"|\"$APP\"|g" 2>/dev/null || true
+
+      - name: Apply custom package ID
+        if: github.event.inputs.package_id != 'org.xbmc.kodi'
+        run: |
+          PKG="${{ github.event.inputs.package_id }}"
+          echo "📦 Setting package ID: $PKG"
+          find ~/kodi/tools/android/packaging -type f | \
+            xargs sed -i "s|org\.xbmc\.kodi|$PKG|g" 2>/dev/null || true
+
+      - name: Apply custom icon
+        run: |
+          ICON="${{ github.workspace }}/kodi-config/icon.png"
+          if [ -f "$ICON" ]; then
+            echo "🖼️ Applying custom icon..."
+            cp "$ICON" ~/kodi/tools/android/packaging/xbmc/res/drawable-xhdpi/ic_launcher.png
+            cp "$ICON" ~/kodi/tools/android/packaging/xbmc/res/drawable-xxhdpi/ic_launcher.png
+            cp "$ICON" ~/kodi/tools/android/packaging/xbmc/res/drawable-xxxhdpi/ic_launcher.png
+            echo "✅ Icon applied"
+          else
+            echo "ℹ️ No custom icon found (kodi-config/icon.png) — using default"
+          fi
+
+      - name: Apply custom splash screen
+        run: |
+          SPLASH="${{ github.workspace }}/kodi-config/splash.png"
+          if [ -f "$SPLASH" ]; then
+            echo "🖼️ Applying custom splash..."
+            cp "$SPLASH" ~/kodi/media/splash.png
+            echo "✅ Splash applied"
+          else
+            echo "ℹ️ No custom splash found (kodi-config/splash.png) — using default"
+          fi
+
+      - name: Stage pre-installed addons
+        run: |
+          ADDONS_FILE="${{ github.workspace }}/kodi-config/addons.txt"
+          if [ ! -f "$ADDONS_FILE" ]; then
+            echo "ℹ️ No addons.txt found — skipping"
+            exit 0
+          fi
+          COUNT=0
+          mkdir -p ~/kodi/addons
+          while IFS= read -r url || [ -n "$url" ]; do
+            url="$(echo "$url" | xargs)"
+            [ -z "$url" ] || [[ "$url" == \#* ]] && continue
+            fname=$(basename "$url")
+            echo "  ⬇️ $fname"
+            if curl -fsSL "$url" -o "/tmp/$fname"; then
+              unzip -q "/tmp/$fname" -d ~/kodi/addons/ 2>/dev/null || true
+              rm -f "/tmp/$fname"
+              COUNT=$((COUNT+1))
+            else
+              echo "  ⚠️ Failed to download: $url"
+            fi
+          done < "$ADDONS_FILE"
+          echo "✅ $COUNT addon(s) staged"
+
+      - name: Bake in advancedsettings.xml
+        run: |
+          SRC="${{ github.workspace }}/kodi-config/advancedsettings.xml"
+          if [ -f "$SRC" ]; then
+            mkdir -p ~/kodi/system
+            cp "$SRC" ~/kodi/system/advancedsettings.xml
+            echo "✅ advancedsettings.xml baked in"
+          fi
+
+      - name: Bake in sources.xml
+        run: |
+          SRC="${{ github.workspace }}/kodi-config/sources.xml"
+          if [ -f "$SRC" ]; then
+            mkdir -p ~/kodi/system
+            cp "$SRC" ~/kodi/system/sources.xml
+            echo "✅ sources.xml baked in"
+          fi
+
+      - name: Cache Kodi depends
+        uses: actions/cache@v4
+        with:
+          path: ~/kodi-depends
+          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v2
+
+      - name: Build Kodi depends
+        run: |
+          echo "🔨 Building depends (cached if unchanged)..."
+          mkdir -p ~/kodi-depends
+          make -C ~/kodi/tools/depends -j$(nproc) \
+            PREFIX=~/kodi-depends \
+            TARGET_PLATFORM=android \
+            TARGET_ARCH=${{ steps.abi.outputs.triplet }} \
+            ANDROID_NDK=~/android-ndk-r26d \
+            ANDROID_SDK=$ANDROID_HOME \
+            2>&1 | grep -E "^(make|Building|ERROR|error:)" | tail -30
+          echo "✅ Depends built"
+
+      - name: Create signing keystore
+        run: |
+          mkdir -p ~/.android
+          keytool -genkey -v \
+            -keystore ~/.android/kodi.keystore \
+            -alias kodi \
+            -keyalg RSA -keysize 2048 \
+            -validity 10000 \
+            -storepass android \
+            -keypass android \
+            -dname "CN=Kodi Build, OU=CI, O=GitHub Actions, L=Cloud, ST=Cloud, C=US" \
+            > /dev/null 2>&1
+          echo "✅ Debug signing key created"
+
+      - name: CMake configure
+        run: |
+          echo "⚙️ Configuring build..."
+          cmake -S ~/kodi -B ~/kodi-cmake \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCORE_PLATFORM_NAME=android \
+            -DANDROID_ABI=${{ steps.abi.outputs.value }} \
+            -DANDROID_NDK=~/android-ndk-r26d \
+            -DANDROID_SDK=$ANDROID_HOME \
+            -DANDROID_SDK_TOOLCHAIN_VER=34.0.0 \
+            2>&1 | tail -10
+          echo "✅ CMake configured"
+
+      - name: Build APK
+        run: |
+          echo "🏗️ Building APK (this takes a while)..."
+          cmake --build ~/kodi-cmake --target apk -j$(nproc) \
+            2>&1 | grep -E "(Building|Linking|error:|warning: )" | tail -40
+          echo "✅ Build complete"
+
+      - name: Sign and zipalign APK
+        id: sign
+        run: |
+          APK=$(find ~/kodi ~/kodi-cmake -name "*.apk" 2>/dev/null | grep -v aligned | head -1)
+          [ -z "$APK" ] && echo "❌ No APK found!" && exit 1
+
+          APP="${{ github.event.inputs.app_name }}"
+          BRANCH="${{ github.event.inputs.branch }}"
+          ABI="${{ steps.abi.outputs.value }}"
+          CUSTOM="${{ github.event.inputs.apk_filename }}"
+
+          # Use custom filename if provided, otherwise auto-generate from app name
+          if [ -n "$CUSTOM" ]; then
+            # Strip any .apk extension the user may have included, then re-add it
+            SAFE_NAME=$(echo "$CUSTOM" | sed 's/\.apk$//i' | tr ' ' '_')
+          else
+            SAFE_NAME=$(echo "$APP" | tr ' ' '_')
+            SAFE_NAME="${SAFE_NAME}-${BRANCH}-${ABI}"
+          fi
+
+          OUT_NAME="${SAFE_NAME}.apk"
+          OUT="/tmp/$OUT_NAME"
+          ALIGNED="/tmp/aligned.apk"
+
+          $ANDROID_HOME/build-tools/34.0.0/zipalign -v 4 "$APK" "$ALIGNED"
+          $ANDROID_HOME/build-tools/34.0.0/apksigner sign \
+            --ks ~/.android/kodi.keystore \
+            --ks-key-alias kodi \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out "$OUT" \
+            "$ALIGNED"
+
+          SIZE=$(du -sh "$OUT" | cut -f1)
+          echo "✅ Signed APK: $OUT_NAME ($SIZE)"
+          echo "apk_path=$OUT"      >> $GITHUB_OUTPUT
+          echo "apk_name=$OUT_NAME" >> $GITHUB_OUTPUT
+
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.sign.outputs.apk_name }}
+          path: ${{ steps.sign.outputs.apk_path }}
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: github.event.inputs.create_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "${{ github.event.inputs.app_name }} ${{ github.event.inputs.branch }} — Build #${{ github.run_number }}"
+          body: |
+            ## Custom Kodi APK
+
+            | Setting | Value |
+            |---------|-------|
+            | Kodi branch | `${{ github.event.inputs.branch }}` |
+            | App name | ${{ github.event.inputs.app_name }} |
+            | APK filename | `${{ steps.sign.outputs.apk_name }}` |
+            | Package ID | `${{ github.event.inputs.package_id }}` |
+            | Target ABI | `${{ steps.abi.outputs.value }}` |
+            | Built | ${{ github.run_number }} |
+
+            ### Install
+            1. Download the `.apk` file below
+            2. Transfer to your Android device
+            3. Enable **Unknown sources** in Android Settings → Security
+            4. Open the APK file on the device to install
+
+            > Built automatically by GitHub Actions from [xbmc/xbmc](https://github.com/xbmc/xbmc)
+          files: ${{ steps.sign.outputs.apk_path }}
+          draft: false
+          prerelease: false
