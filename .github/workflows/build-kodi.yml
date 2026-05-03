@@ -300,11 +300,33 @@ jobs:
             2>&1 | grep -E "(Building|Linking|error:|warning: )" | tail -40
           echo "✅ Build complete"
 
+      - name: Locate built APK
+        id: locate
+        run: |
+          echo "🔍 Searching for APK files..."
+          # Kodi's apk target can place the output in several locations depending on version:
+          #   ~/kodi/tools/android/packaging/
+          #   ~/kodi-cmake/
+          #   $HOME directly
+          # Search the whole home dir to be safe, exclude gradle caches and temp files
+          find ~ -name "*.apk" 2>/dev/null             | grep -v "\.gradle"             | grep -v "/tmp/"             | grep -v "aligned"             | sort
+          APK=$(find ~ -name "*.apk" 2>/dev/null             | grep -v "\.gradle"             | grep -v "/tmp/"             | grep -v "aligned"             | head -1)
+          if [ -z "$APK" ]; then
+            echo "❌ No APK found anywhere under $HOME"
+            echo "Contents of ~/kodi/tools/android/packaging (if exists):"
+            ls -la ~/kodi/tools/android/packaging/ 2>/dev/null || echo "  (not found)"
+            echo "Contents of ~/kodi-cmake (top level):"
+            ls -la ~/kodi-cmake/ 2>/dev/null || echo "  (not found)"
+            exit 1
+          fi
+          echo "✅ Found APK: $APK"
+          echo "apk_path=$APK" >> $GITHUB_OUTPUT
+
       - name: Sign and zipalign APK
         id: sign
         run: |
-          APK=$(find ~/kodi ~/kodi-cmake -name "*.apk" 2>/dev/null | grep -v aligned | head -1)
-          [ -z "$APK" ] && echo "❌ No APK found!" && exit 1
+          APK="${{ steps.locate.outputs.apk_path }}"
+          [ -z "$APK" ] && echo "❌ No APK path from locate step!" && exit 1
 
           APP="${{ github.event.inputs.app_name }}"
           BRANCH="${{ github.event.inputs.branch }}"
