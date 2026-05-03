@@ -267,7 +267,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/kodi-depends
-          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v9
+          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v10
 
       - name: Configure and build Kodi depends
         run: |
@@ -297,15 +297,25 @@ jobs:
             sed -i "s|CMAKE=@prefix@/@tool_dir@/bin/cmake|CMAKE=$SYS_CMAKE|g" Makefile.include.in
             echo "✅ Patched Makefile.include.in: CMAKE=$SYS_CMAKE"
 
-            # Replace the native cmake Makefile with a stub that installs the system cmake.
-            # The real Makefile tries to build cmake from source using CC=clang which fails.
-            printf 'PLATFORM = x86_64-linux-native\n' > native/cmake/Makefile
-            printf 'all: .installed-$$(PLATFORM)\n\n' >> native/cmake/Makefile
-            printf '$$(PLATFORM):\n\tmkdir -p $$(PLATFORM)/bin\n\n' >> native/cmake/Makefile
-            printf '$$(PLATFORM)/bin/cmake: $$(PLATFORM)\n\tcp -f $$(shell which cmake) $$(PLATFORM)/bin/cmake\n\n' >> native/cmake/Makefile
-            printf '.installed-$$(PLATFORM): $$(PLATFORM)/bin/cmake\n\tmkdir -p $$(PREFIX)/bin\n\tcp -f $$(PLATFORM)/bin/cmake $$(PREFIX)/bin/cmake\n\ttouch .installed-$$(PLATFORM)\n\n' >> native/cmake/Makefile
-            printf 'clean:\n\trm -rf $$(PLATFORM) .installed-$$(PLATFORM)\n' >> native/cmake/Makefile
-            echo "✅ Replaced native/cmake/Makefile with stub"
+            # The parent native/Makefile has cmake as a dependency at line ~104.
+            # It calls 'make -C native/cmake' which builds cmake from source using clang,
+            # which fails with "unsupported option -print-multi-os-directory".
+            # Fix: remove cmake from the native Makefile dependency list and
+            # instead pre-populate the cmake binary directly in the prefix.
+
+            # 1. Remove 'cmake' from the native Makefile dependency list
+            sed -i '/^\s*cmake\s*$\|cmake \\$/d' native/Makefile
+            sed -i 's/ cmake / /g; s/ cmake$//g; s/^cmake //g' native/Makefile
+            echo "✅ Removed cmake from native/Makefile dependency list"
+            grep -n "cmake" native/Makefile | head -5 || echo "  (cmake no longer in native/Makefile)"
+
+            # 2. Pre-install system cmake into the expected output location
+            mkdir -p "$NATIVE_BIN"
+            cp -f "$SYS_CMAKE" "$NATIVE_BIN/cmake"
+            chmod +x "$NATIVE_BIN/cmake"
+            # Create the installed marker so make sees cmake as done
+            touch "$DEPENDS_DIR/native/cmake/.installed-x86_64-linux-native"
+            echo "✅ Pre-installed system cmake → $NATIVE_BIN/cmake""
 
             echo "⚙️ Configuring depends..."
             ./configure \
