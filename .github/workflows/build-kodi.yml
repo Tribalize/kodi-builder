@@ -178,6 +178,24 @@ jobs:
           fi
           echo "✅ Source ready ($(git -C ~/kodi rev-parse --short HEAD))"
 
+      - name: Patch Android looper API for newer NDK
+        run: |
+          set -euo pipefail
+          # NDK r28+ marks ALooper_pollAll unavailable; Kodi branches still using it
+          # fail to compile. ALooper_pollOnce is the supported equivalent signature.
+          mapfile -t LOOPER_FILES < <(grep -RIl "ALooper_pollAll(" ~/kodi/xbmc/platform/android || true)
+          if [ ${#LOOPER_FILES[@]} -eq 0 ]; then
+            echo "ℹ️ No ALooper_pollAll usage found under xbmc/platform/android"
+            exit 0
+          fi
+          echo "Patching ALooper_pollAll -> ALooper_pollOnce in:"
+          printf ' - %s\n' "${LOOPER_FILES[@]}"
+          for f in "${LOOPER_FILES[@]}"; do
+            sed -i 's/ALooper_pollAll(/ALooper_pollOnce(/g' "$f"
+          done
+          echo "Verification:"
+          grep -RIn "ALooper_poll(All|Once)\(" ~/kodi/xbmc/platform/android | head -50 || true
+
       - name: Apply custom app name
         if: github.event.inputs.app_name != 'Kodi'
         run: |
