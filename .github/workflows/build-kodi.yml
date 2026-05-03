@@ -267,7 +267,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/kodi-depends
-          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v16
+          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v17
 
       - name: Configure and build Kodi depends
         run: |
@@ -363,11 +363,11 @@ jobs:
             SKIP_PKGS="$SKIP_PKGS wayland waylandpp wayland-protocols"
             for pkg in $SKIP_PKGS; do
               sed -i "/^${pkg}:/,/^[^	]/{/^${pkg}:/d;/^	/d}" target/Makefile
-              sed -i "s/\b${pkg}\b//g" target/Makefile
+              sed -i "s/ ${pkg} / /g; s/ ${pkg}$//; s/^${pkg} //" target/Makefile
             done
             sed -i 's/  */ /g' target/Makefile
             echo "Removed non-Android packages. Remaining package refs check:"
-            grep -n "samba\|libcdio\|libcec\|lirc\|libdvd\| dbus \|wayland" target/Makefile | head -10 || echo "  none""
+            grep -n "samba\|libcdio\|libcec\|lirc\|libdvd\|wayland" target/Makefile | head -10 || echo "  none"
 
             # Place cmake symlink in the native bin for cmakebuildsys
             mkdir -p "$NATIVE_BIN"
