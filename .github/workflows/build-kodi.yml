@@ -565,7 +565,10 @@ jobs:
 
       - name: Create signing keystore
         run: |
+          set -euo pipefail
           mkdir -p ~/.android
+
+          # Keystore used by our final apksigner step
           keytool -genkey -v \
             -keystore ~/.android/kodi.keystore \
             -alias kodi \
@@ -575,7 +578,21 @@ jobs:
             -keypass android \
             -dname "CN=Kodi Build, OU=CI, O=GitHub Actions, L=Cloud, ST=Cloud, C=US" \
             > /dev/null 2>&1
-          echo "✅ Debug signing key created"
+
+          # Kodi/Gradle packaging validateSigningRelease expects this exact file path
+          # and debug alias in some branches/configs.
+          keytool -genkey -v \
+            -keystore ~/.android/debug.keystore \
+            -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 \
+            -validity 10000 \
+            -storepass android \
+            -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US" \
+            > /dev/null 2>&1
+
+          echo "✅ Signing keystores created:"
+          ls -la ~/.android
 
       - name: Build Kodi
         run: |
@@ -607,7 +624,7 @@ jobs:
           if ! find ~ -name "*.apk" 2>/dev/null | grep -qv ".gradle"; then
             echo "ℹ️ Trying gradle directly..."
             cd "$KODI_SRC/tools/android/packaging"
-            ./gradlew assembleRelease 2>&1 | tee -a ~/apk-package.log || true
+            ./gradlew :xbmc:assembleRelease 2>&1 | tee -a ~/apk-package.log || true
           fi
           echo "--- APK search after packaging ---"
           find ~ -name "*.apk" 2>/dev/null | grep -v ".gradle" | grep -v "/tmp/" | sort || echo "No APK found yet"
