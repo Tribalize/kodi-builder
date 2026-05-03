@@ -415,21 +415,18 @@ jobs:
           echo "cmake in PATH: $(which cmake) — $(cmake --version | head -1)"
           cd $HOME/kodi
 
-          # Patch ALL cmake files: change core_require_dep to core_optional_dep for libs
-          # we didn't build in depends. Use grep -rl to find which file actually has each call.
-          # The calls may be in platform-specific files, not just root CMakeLists.txt.
-          PATCH_PKGS="Cdio Iso9660pp LircClient MicroHttpd Samba SmbClient DBus Alsa UDEV CEC"
-          for dep in $PATCH_PKGS; do
-            grep -rl "core_require_dep(${dep})" . 2>/dev/null | while read f; do
-              sed -i "s/core_require_dep(${dep})/core_optional_dep(${dep})/g" "$f"
-              echo "  Patched $f: core_require_dep($dep) → core_optional_dep"
-            done
-          done
-          echo "Patch complete — verifying no core_require_dep remains for skipped libs:"
-          grep -r "core_require_dep" CMakeLists.txt cmake/ 2>/dev/null | grep -E "Cdio|LircClient|MicroHttpd|Samba|SmbClient|DBus|Alsa|UDEV|CEC" || echo "  none found""
+          # Nuclear option: replace ALL core_require_dep calls with core_optional_dep
+          # across the entire source tree. This prevents any missing-library hard errors.
+          # We then use ENABLE_X=OFF for things we explicitly don't want.
+          # NOTE: core_optional_dep respects ENABLE flags; core_require_dep ignores them.
+          echo "Patching all core_require_dep → core_optional_dep in source tree..."
+          grep -rl "core_require_dep" . --include="*.cmake" --include="CMakeLists.txt" 2>/dev/null |             xargs -r sed -i 's/core_require_dep(/core_optional_dep(/g'
+          echo "Patch complete. Remaining core_require_dep calls:"
+          grep -r "core_require_dep" . --include="*.cmake" --include="CMakeLists.txt" 2>/dev/null | head -5 || echo "  none"
 
-          # Disable features we skipped in depends (libcdio=optical, gnutls/microhttpd=webserver, etc.)
-          # These must be OFF or cmake will fail with "Could NOT find" errors.
+          # ENABLE=OFF: explicitly disable features we skipped in depends.
+          # ENABLE=AUTO (default) would just skip gracefully if not found.
+          # OFF is correct here — we don't want cmake to even try to use them.
           KODI_CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release"
           KODI_CMAKE_ARGS="$KODI_CMAKE_ARGS -DENABLE_OPTICAL=OFF"
           KODI_CMAKE_ARGS="$KODI_CMAKE_ARGS -DENABLE_MICROHTTPD=OFF"
