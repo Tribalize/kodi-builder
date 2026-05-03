@@ -267,7 +267,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/kodi-depends
-          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v17
+          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v18
 
       - name: Configure and build Kodi depends
         run: |
@@ -362,9 +362,15 @@ jobs:
             SKIP_PKGS="$SKIP_PKGS libxkbcommon libinput libudev libevdev mtdev"
             SKIP_PKGS="$SKIP_PKGS wayland waylandpp wayland-protocols"
             for pkg in $SKIP_PKGS; do
+              # Remove make rule block for this package
               sed -i "/^${pkg}:/,/^[^	]/{/^${pkg}:/d;/^	/d}" target/Makefile
+              # Remove from DEPENDS+= lines (handles: "pkg ", " pkg", "pkg$", "+=pkg")
+              sed -i "s/+=${pkg}$/+=/g" target/Makefile
+              sed -i "s/+=${pkg} /+=/g" target/Makefile
               sed -i "s/ ${pkg} / /g; s/ ${pkg}$//; s/^${pkg} //" target/Makefile
             done
+            # Clean up empty DEPENDS+= lines and double spaces
+            sed -i '/^[[:space:]]*DEPENDS+=[[:space:]]*$/d' target/Makefile
             sed -i 's/  */ /g' target/Makefile
             echo "Removed non-Android packages. Remaining package refs check:"
             grep -n "samba\|libcdio\|libcec\|lirc\|libdvd\|wayland" target/Makefile | head -10 || echo "  none"
