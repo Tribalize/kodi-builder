@@ -211,6 +211,27 @@ jobs:
           echo "Verification of CDDA include guard in FileFactory.cpp:"
           grep -n 'CDDAFile.h\|HAS_OPTICAL_DRIVE' "$FILE" | head -20 || true
 
+      - name: Patch CDDB include chain for no-optical Android builds
+        run: |
+          set -euo pipefail
+          MUSIC_DB=~/kodi/xbmc/music/MusicDatabase.cpp
+          CDDB_HDR=~/kodi/xbmc/network/cddb.h
+
+          if [ -f "$MUSIC_DB" ]; then
+            # Avoid pulling cddb.h (which pulls cdio) when optical is disabled.
+            sed -i 's@#include "network/cddb.h"@#if defined(HAS_OPTICAL_DRIVE)\n#include "network/cddb.h"\n#endif@' "$MUSIC_DB"
+            echo "Patched MusicDatabase.cpp include guard:"
+            grep -n 'network/cddb.h\|HAS_OPTICAL_DRIVE' "$MUSIC_DB" | head -20 || true
+          fi
+
+          if [ -f "$CDDB_HDR" ]; then
+            # Defensive: if another TU still includes cddb.h with optical off, forward declare
+            # CCdInfo instead of hard including cdioSupport.h.
+            sed -i 's@#include "storage/cdioSupport.h"@#if defined(HAS_OPTICAL_DRIVE)\n#include "storage/cdioSupport.h"\n#else\nnamespace MEDIA_DETECT { class CCdInfo; }\n#endif@' "$CDDB_HDR"
+            echo "Patched cddb.h include guard:"
+            grep -n 'cdioSupport.h\|MEDIA_DETECT\|HAS_OPTICAL_DRIVE' "$CDDB_HDR" | head -30 || true
+          fi
+
       - name: Apply custom app name
         if: github.event.inputs.app_name != 'Kodi'
         run: |
