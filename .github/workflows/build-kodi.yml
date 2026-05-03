@@ -267,7 +267,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/kodi-depends
-          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v14
+          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v16
 
       - name: Configure and build Kodi depends
         run: |
@@ -332,17 +332,42 @@ jobs:
               --disable-gplv3 \
               --enable-debug=no
 
-            # Remove samba and samba-gplv3 from the target Makefile.
-            # Both fail with Android clang. Use sed with multiple passes for reliability.
-            # Pass 1: remove lines whose only content (after tab) is a samba target rule
-            sed -i '/^samba-gplv3:/,/^[^	]/{/^samba-gplv3:/d;/^	/d}' target/Makefile
-            sed -i '/^samba:/,/^[^	]/{/^samba:/d;/^	/d}' target/Makefile
-            # Pass 2: remove samba words from DEPENDS+= lines
-            sed -i 's/samba-gplv3//g; s/samba//g' target/Makefile
-            # Pass 3: clean up double spaces left behind
+            # Remove packages that are not needed for Android or fail to build with
+            # Android clang on GitHub-hosted runners. All confirmed non-issues for
+            # the Android APK — Kodi Android has its own SMB (libsmb2), no optical
+            # disc support, no system dbus, no CEC, no Wayland/X11, etc.
+            #
+            # Package list and reasons:
+            #  samba / samba-gplv3   — IDL type errors with NDK clang; libsmb2 used instead
+            #  libcdio / libcdio-gplv3 — AM_LANGINFO_CODESET autoconf error; CD-ROM, N/A on Android
+            #  libcec                — CEC (HDMI) only meaningful on Linux desktop / embedded
+            #  lirc                  — Linux infrared; no Android support
+            #  libdvdcss             — DVD decryption; optical discs N/A on Android
+            #  libdvdread / libdvdnav — DVD navigation; optical discs N/A on Android
+            #  dbus                  — Linux system bus; not used on Android
+            #  libuuid               — provided by Android NDK bionic libc directly
+            #  alsa-lib              — ALSA audio; Android uses AudioTrack/AAudio
+            #  libdrm                — DRM/KMS; Android uses SurfaceFlinger
+            #  libxkbcommon          — X11 keyboard handling; N/A on Android
+            #  libinput              — Linux input subsystem; N/A on Android
+            #  libudev               — udev device manager; N/A on Android
+            #  libevdev              — evdev input; N/A on Android
+            #  mtdev                 — multitouch device; N/A on Android
+            #  wayland               — Wayland compositor; N/A on Android
+            #  waylandpp             — Wayland C++ bindings; N/A on Android
+            #  wayland-protocols     — Wayland protocols; N/A on Android
+            SKIP_PKGS="samba-gplv3 samba libcdio-gplv3 libcdio libcec lirc"
+            SKIP_PKGS="$SKIP_PKGS libdvdcss libdvdread libdvdnav"
+            SKIP_PKGS="$SKIP_PKGS dbus libuuid alsa-lib libdrm"
+            SKIP_PKGS="$SKIP_PKGS libxkbcommon libinput libudev libevdev mtdev"
+            SKIP_PKGS="$SKIP_PKGS wayland waylandpp wayland-protocols"
+            for pkg in $SKIP_PKGS; do
+              sed -i "/^${pkg}:/,/^[^	]/{/^${pkg}:/d;/^	/d}" target/Makefile
+              sed -i "s/\b${pkg}\b//g" target/Makefile
+            done
             sed -i 's/  */ /g' target/Makefile
-            echo "Removed samba — remaining refs:"
-            grep -n "samba" target/Makefile | head -10 || echo "  none"
+            echo "Removed non-Android packages. Remaining package refs check:"
+            grep -n "samba\|libcdio\|libcec\|lirc\|libdvd\| dbus \|wayland" target/Makefile | head -10 || echo "  none""
 
             # Place cmake symlink in the native bin for cmakebuildsys
             mkdir -p "$NATIVE_BIN"
