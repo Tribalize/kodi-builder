@@ -134,11 +134,14 @@ jobs:
 
       - name: Clone / update Kodi source
         run: |
+          set -euo pipefail
           if [ -d ~/kodi/.git ]; then
             echo "📦 Updating existing source..."
             git -C ~/kodi fetch origin
             git -C ~/kodi checkout ${{ github.event.inputs.branch }}
-            git -C ~/kodi pull --ff-only
+            # Ensure cached source is deterministic and not carrying prior run patches
+            git -C ~/kodi reset --hard "origin/${{ github.event.inputs.branch }}"
+            git -C ~/kodi clean -fd
           else
             echo "📦 Cloning Kodi ${{ github.event.inputs.branch }}..."
             git clone --depth=1 \
@@ -271,6 +274,7 @@ jobs:
 
       - name: Configure and build Kodi depends
         run: |
+          set -euo pipefail
           DEPENDS_DIR=$HOME/kodi/tools/depends
           DEPENDS_PREFIX=$HOME/kodi-depends
           TARBALLS=$HOME/kodi-tarballs
@@ -386,9 +390,11 @@ jobs:
             export CARGO_HOME="$DEPENDS_PREFIX/x86_64-linux-gnu-native/.cargo"
 
             echo "🔨 Building depends (60-90 min first time)..."
+            set +e
             make -j$(nproc) 2>&1 | tee ~/depends-build.log | \
               grep -E "(^(make\[1\]:|ERROR|Building |Downloading )|error:)" | tail -80
             BUILD_EXIT=${PIPESTATUS[0]}
+            set -e
 
             if [ $BUILD_EXIT -ne 0 ]; then
               echo "❌ Depends build failed (exit $BUILD_EXIT)"
@@ -405,10 +411,13 @@ jobs:
 
       - name: Generate CMake build files via cmakebuildsys
         run: |
+          set -euo pipefail
           # cmakebuildsys uses the depends toolchain + cmake (symlinked to system cmake)
           BUILD_DIR=$HOME/kodi-build
           DEPENDS_PREFIX=$HOME/kodi-depends
           NATIVE_BIN="$DEPENDS_PREFIX/x86_64-linux-gnu-native/bin"
+          # Avoid stale cache/config interactions from prior attempts in same runner state
+          rm -rf "$BUILD_DIR"
           mkdir -p "$BUILD_DIR"
           # Ensure PATH includes native bin so cmakebuildsys finds our cmake symlink
           export PATH="$NATIVE_BIN:$PATH"
@@ -423,6 +432,17 @@ jobs:
           grep -rl "core_require_dep" . --include="*.cmake" --include="CMakeLists.txt" 2>/dev/null |             xargs -r sed -i 's/core_require_dep(/core_optional_dep(/g'
           echo "Patch complete. Remaining core_require_dep calls:"
           grep -r "core_require_dep" . --include="*.cmake" --include="CMakeLists.txt" 2>/dev/null | head -5 || echo "  none"
+
+          # FindLibZip currently hard-requires GnuTLS when it needs to build internal
+          # libzip. In this workflow we intentionally skip gnutls in depends, so patch
+          # libzip discovery to use OpenSSL-backed libzip instead of failing configure.
+          if [ -f cmake/modules/FindLibZip.cmake ]; then
+            echo "Patching FindLibZip.cmake to avoid hard GnuTLS dependency..."
+            sed -i 's/find_package(GnuTLS MODULE REQUIRED)/find_package(GnuTLS MODULE QUIET)/' cmake/modules/FindLibZip.cmake
+            sed -i '/set(CMAKE_ARGS -DBUILD_DOC=OFF/a\                 -DENABLE_GNUTLS=OFF\n                 -DENABLE_OPENSSL=ON\n                 -DENABLE_MBEDTLS=OFF\n                 -DENABLE_WINDOWS_CRYPTO=OFF\n                 -DENABLE_COMMONCRYPTO=OFF' cmake/modules/FindLibZip.cmake
+            echo "Patched lines:"
+            grep -n "GnuTLS\|ENABLE_GNUTLS\|ENABLE_OPENSSL\|ENABLE_MBEDTLS" cmake/modules/FindLibZip.cmake || true
+          fi
 
           # ENABLE=OFF: explicitly disable features we skipped in depends.
           # ENABLE=AUTO (default) would just skip gracefully if not found.
@@ -439,10 +459,19 @@ jobs:
           KODI_CMAKE_ARGS="$KODI_CMAKE_ARGS -DENABLE_PULSEAUDIO=OFF"
           KODI_CMAKE_ARGS="$KODI_CMAKE_ARGS -DENABLE_PIPEWIRE=OFF"
           KODI_CMAKE_ARGS="$KODI_CMAKE_ARGS -DENABLE_SMBCLIENT=OFF"
+          set +e
           make -C tools/depends/target/cmakebuildsys \
             BUILD_DIR="$BUILD_DIR" \
             CMAKE_EXTRA_ARGUMENTS="$KODI_CMAKE_ARGS" \
             2>&1 | tee ~/cmakebuildsys.log | tail -40
+          CMAKEGEN_EXIT=${PIPESTATUS[0]}
+          set -e
+          if [ $CMAKEGEN_EXIT -ne 0 ]; then
+            echo "❌ cmakebuildsys failed (exit $CMAKEGEN_EXIT)"
+            echo "--- Full cmakebuildsys log ---"
+            cat ~/cmakebuildsys.log
+            exit $CMAKEGEN_EXIT
+          fi
           # Verify a Makefile was actually generated
           if [ ! -f "$BUILD_DIR/Makefile" ]; then
             echo "❌ cmakebuildsys did not produce a Makefile"
@@ -469,13 +498,17 @@ jobs:
 
       - name: Build Kodi
         run: |
+          set -euo pipefail
           BUILD_DIR=$HOME/kodi-build
           echo "🏗️ Building Kodi (this takes a while)..."
+          set +e
           make -C "$BUILD_DIR" -j$(nproc) 2>&1 | tee ~/kodi-build.log | tail -60
-          if [ $? -ne 0 ]; then
-            echo "❌ Build failed"
+          BUILD_EXIT=${PIPESTATUS[0]}
+          set -e
+          if [ $BUILD_EXIT -ne 0 ]; then
+            echo "❌ Build failed (exit $BUILD_EXIT)"
             tail -100 ~/kodi-build.log
-            exit 1
+            exit $BUILD_EXIT
           fi
           echo "✅ Kodi compiled"
 
