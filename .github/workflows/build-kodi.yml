@@ -81,11 +81,15 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            git cmake ninja-build make nasm python3 \
+            git ninja-build make nasm python3 \
             curl unzip zip openjdk-17-jdk-headless \
             autoconf libtool pkg-config yasm ccache \
             libgl1-mesa-dev libgles2-mesa-dev \
+            gperf default-jre \
             2>&1 | tail -5
+          # Install cmake 3.25+ required by Kodi depends
+          sudo apt-get install -y cmake --no-install-recommends 2>/dev/null || true
+          cmake --version
           echo "✅ System packages installed"
 
       - name: Cache Android NDK
@@ -257,7 +261,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/kodi-depends
-          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v5
+          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v6
 
       - name: Configure and build Kodi depends
         run: |
@@ -266,53 +270,79 @@ jobs:
           TARBALLS=$HOME/kodi-tarballs
           NDK=$HOME/android-ndk-r26d
           HOST=${{ steps.abi.outputs.triplet }}
-          NATIVE_CMAKE="$DEPENDS_PREFIX/x86_64-linux-gnu-native/bin/cmake"
+          SYS_CMAKE=$(which cmake)
 
           mkdir -p "$TARBALLS"
 
-          # Cache is valid only if native cmake binary exists (proves native tools were built)
-          if [ "${{ steps.depends-cache.outputs.cache-hit }}" = "true" ] && [ -x "$NATIVE_CMAKE" ]; then
-            echo "✅ Valid cached depends found (native cmake present) — skipping rebuild"
+          # The GitHub runner has Rust pre-installed which conflicts with the depends
+          # rustup build. Unset CARGO_HOME and point rustup at a temp dir to avoid
+          # "cannot install while Rust is installed" error.
+          export RUSTUP_HOME=$HOME/.rustup-depends
+          export CARGO_HOME=$HOME/.cargo-depends
+
+          # Cache hit is valid if the target prefix has libs and system cmake works
+          if [ "${{ steps.depends-cache.outputs.cache-hit }}" = "true" ] && \
+             [ -d "$DEPENDS_PREFIX/aarch64-linux-android-24-release/lib" ] && \
+             [ "$(ls -A $DEPENDS_PREFIX/aarch64-linux-android-24-release/lib 2>/dev/null)" ]; then
+            echo "✅ Valid cached depends — skipping rebuild"
           else
             echo "📦 Bootstrapping depends..."
             cd "$DEPENDS_DIR"
             ./bootstrap
 
-            echo "⚙️ Configuring depends..."
-            ./configure               --host="$HOST"               --with-sdk-path="$ANDROID_HOME"               --with-ndk-path="$NDK"               --with-ndk-api=24               --with-tarballs="$TARBALLS"               --prefix="$DEPENDS_PREFIX"               --enable-debug=no
-
-            echo "🔨 Building native tools (cmake, gas-preprocessor, etc.)..."
-            make -j$(nproc) -C native 2>&1 | tee ~/depends-native.log |               grep -E "(^(make|ERROR)|error:)" | tail -30
-            echo "✅ Native tools built"
+            echo "⚙️ Configuring depends (using system cmake, skipping native cmake build)..."
+            ./configure \
+              --host="$HOST" \
+              --with-sdk-path="$ANDROID_HOME" \
+              --with-ndk-path="$NDK" \
+              --with-ndk-api=24 \
+              --with-tarballs="$TARBALLS" \
+              --prefix="$DEPENDS_PREFIX" \
+              --with-cmake="$SYS_CMAKE" \
+              --enable-debug=no
 
             echo "🔨 Building target libraries (60-90 min)..."
-            make -j$(nproc) 2>&1 | tee ~/depends-target.log |               grep -E "(^(make|ERROR)|error:)" | tail -60
-            echo "✅ Target libraries built"
+            # Use SKIPNATIVE=1 to skip native tool builds (use system tools instead)
+            make -j$(nproc) SKIPNATIVE=1 2>&1 | tee ~/depends-target.log | \
+              grep -E "(^(make\[1\]|ERROR|Downloading|Configuring|Building)|error:)" | tail -80
+            BUILD_EXIT=${PIPESTATUS[0]}
 
-            # Verify native cmake is present
-            if [ ! -x "$NATIVE_CMAKE" ]; then
-              echo "❌ Native cmake not found at $NATIVE_CMAKE after build"
-              echo "Contents of native bin:"
-              ls "$DEPENDS_PREFIX/x86_64-linux-gnu-native/bin/" 2>/dev/null || echo "  (directory not found)"
+            if [ $BUILD_EXIT -ne 0 ]; then
+              echo "❌ Depends build failed (exit $BUILD_EXIT)"
+              tail -100 ~/depends-target.log
               exit 1
             fi
-            echo "✅ Native cmake confirmed: $NATIVE_CMAKE"
+            echo "✅ Target libraries built"
           fi
+
+          # Symlink system cmake into the native prefix so cmakebuildsys can find it
+          NATIVE_BIN="$DEPENDS_PREFIX/x86_64-linux-gnu-native/bin"
+          mkdir -p "$NATIVE_BIN"
+          if [ ! -f "$NATIVE_BIN/cmake" ]; then
+            ln -sf "$SYS_CMAKE" "$NATIVE_BIN/cmake"
+            echo "✅ Symlinked system cmake → $NATIVE_BIN/cmake"
+          fi
+          echo "cmake: $($NATIVE_BIN/cmake --version | head -1)"
 
       - name: Generate CMake build files via cmakebuildsys
         run: |
-          # cmakebuildsys uses the depends-built cmake + toolchain — must run from kodi source root
+          # cmakebuildsys uses the depends toolchain + cmake (symlinked to system cmake)
           BUILD_DIR=$HOME/kodi-build
+          DEPENDS_PREFIX=$HOME/kodi-depends
+          NATIVE_BIN="$DEPENDS_PREFIX/x86_64-linux-gnu-native/bin"
           mkdir -p "$BUILD_DIR"
+          # Ensure PATH includes native bin so cmakebuildsys finds our cmake symlink
+          export PATH="$NATIVE_BIN:$PATH"
+          echo "cmake in PATH: $(which cmake) — $(cmake --version | head -1)"
           cd $HOME/kodi
           make -C tools/depends/target/cmakebuildsys \
             BUILD_DIR="$BUILD_DIR" \
             CMAKE_EXTRA_ARGUMENTS="-DCMAKE_BUILD_TYPE=Release" \
-            2>&1 | tee ~/cmakebuildsys.log | tail -30
+            2>&1 | tee ~/cmakebuildsys.log | tail -40
           # Verify a Makefile was actually generated
           if [ ! -f "$BUILD_DIR/Makefile" ]; then
             echo "❌ cmakebuildsys did not produce a Makefile"
-            echo "--- cmakebuildsys log ---"
+            echo "--- Full cmakebuildsys log ---"
             cat ~/cmakebuildsys.log
             exit 1
           fi
