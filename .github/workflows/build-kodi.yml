@@ -415,20 +415,18 @@ jobs:
           echo "cmake in PATH: $(which cmake) — $(cmake --version | head -1)"
           cd $HOME/kodi
 
-          # Patch CMakeLists.txt: change core_require_dep to core_optional_dep for libs
-          # we didn't build in depends. core_require_dep is a hard error even with ENABLE_X=OFF.
-          # core_optional_dep respects the ENABLE flag and skips gracefully when not found.
-          sed -i 's/core_require_dep(Cdio)/core_optional_dep(Cdio)/g' CMakeLists.txt
-          sed -i 's/core_require_dep(Iso9660pp)/core_optional_dep(Iso9660pp)/g' CMakeLists.txt
-          sed -i 's/core_require_dep(LircClient)/core_optional_dep(LircClient)/g' CMakeLists.txt
-          sed -i 's/core_require_dep(MicroHttpd)/core_optional_dep(MicroHttpd)/g' CMakeLists.txt
-          sed -i 's/core_require_dep(Samba)/core_optional_dep(Samba)/g' CMakeLists.txt
-          sed -i 's/core_require_dep(SmbClient)/core_optional_dep(SmbClient)/g' CMakeLists.txt
-          sed -i 's/core_require_dep(DBus)/core_optional_dep(DBus)/g' CMakeLists.txt
-          sed -i 's/core_require_dep(Alsa)/core_optional_dep(Alsa)/g' CMakeLists.txt
-          sed -i 's/core_require_dep(UDEV)/core_optional_dep(UDEV)/g' CMakeLists.txt
-          sed -i 's/core_require_dep(CEC)/core_optional_dep(CEC)/g' CMakeLists.txt
-          echo "Patched CMakeLists.txt core_require_dep → core_optional_dep for missing libs"
+          # Patch ALL cmake files: change core_require_dep to core_optional_dep for libs
+          # we didn't build in depends. Use grep -rl to find which file actually has each call.
+          # The calls may be in platform-specific files, not just root CMakeLists.txt.
+          PATCH_PKGS="Cdio Iso9660pp LircClient MicroHttpd Samba SmbClient DBus Alsa UDEV CEC"
+          for dep in $PATCH_PKGS; do
+            grep -rl "core_require_dep(${dep})" . 2>/dev/null | while read f; do
+              sed -i "s/core_require_dep(${dep})/core_optional_dep(${dep})/g" "$f"
+              echo "  Patched $f: core_require_dep($dep) → core_optional_dep"
+            done
+          done
+          echo "Patch complete — verifying no core_require_dep remains for skipped libs:"
+          grep -r "core_require_dep" CMakeLists.txt cmake/ 2>/dev/null | grep -E "Cdio|LircClient|MicroHttpd|Samba|SmbClient|DBus|Alsa|UDEV|CEC" || echo "  none found""
 
           # Disable features we skipped in depends (libcdio=optical, gnutls/microhttpd=webserver, etc.)
           # These must be OFF or cmake will fail with "Could NOT find" errors.
