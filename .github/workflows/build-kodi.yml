@@ -267,7 +267,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/kodi-depends
-          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v10
+          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v11
 
       - name: Configure and build Kodi depends
         run: |
@@ -303,19 +303,23 @@ jobs:
             # Fix: remove cmake from the native Makefile dependency list and
             # instead pre-populate the cmake binary directly in the prefix.
 
-            # 1. Remove 'cmake' from the native Makefile dependency list
-            sed -i '/^\s*cmake\s*$\|cmake \\$/d' native/Makefile
-            sed -i 's/ cmake / /g; s/ cmake$//g; s/^cmake //g' native/Makefile
-            echo "✅ Removed cmake from native/Makefile dependency list"
-            grep -n "cmake" native/Makefile | head -5 || echo "  (cmake no longer in native/Makefile)"
+            # 1. Remove 'cmake' from the native Makefile dependency list.
+            # Use grep+awk to safely rewrite the file without complex regex.
+            grep -v '^	cmake$' native/Makefile | \
+              sed 's/ cmake / /g' | \
+              sed 's/ cmake$//' | \
+              sed 's/cmake \\//' > native/Makefile.tmp
+            mv native/Makefile.tmp native/Makefile
+            echo "Removed cmake from native/Makefile — cmake refs remaining:"
+            grep -n "cmake" native/Makefile | head -5 || echo "  none"
 
             # 2. Pre-install system cmake into the expected output location
             mkdir -p "$NATIVE_BIN"
             cp -f "$SYS_CMAKE" "$NATIVE_BIN/cmake"
             chmod +x "$NATIVE_BIN/cmake"
-            # Create the installed marker so make sees cmake as done
+            mkdir -p "$DEPENDS_DIR/native/cmake"
             touch "$DEPENDS_DIR/native/cmake/.installed-x86_64-linux-native"
-            echo "✅ Pre-installed system cmake → $NATIVE_BIN/cmake""
+            echo "Pre-installed system cmake at $NATIVE_BIN/cmake"
 
             echo "⚙️ Configuring depends..."
             ./configure \
