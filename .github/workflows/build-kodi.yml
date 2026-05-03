@@ -277,12 +277,21 @@ jobs:
 
       - name: Generate CMake build files via cmakebuildsys
         run: |
-          # Kodi requires cmake to be invoked via its own depends-built helper,
-          # not system cmake. cmakebuildsys sets up the correct toolchain file.
-          BUILD_DIR=~/kodi-build
+          # cmakebuildsys uses the depends-built cmake + toolchain — must run from kodi source root
+          BUILD_DIR=$HOME/kodi-build
           mkdir -p "$BUILD_DIR"
-          cd ~/kodi
-          make -C tools/depends/target/cmakebuildsys             BUILD_DIR="$BUILD_DIR"             CMAKE_EXTRA_ARGUMENTS="-DCMAKE_BUILD_TYPE=Release"             2>&1 | tail -30
+          cd $HOME/kodi
+          make -C tools/depends/target/cmakebuildsys \
+            BUILD_DIR="$BUILD_DIR" \
+            CMAKE_EXTRA_ARGUMENTS="-DCMAKE_BUILD_TYPE=Release" \
+            2>&1 | tee ~/cmakebuildsys.log | tail -30
+          # Verify a Makefile was actually generated
+          if [ ! -f "$BUILD_DIR/Makefile" ]; then
+            echo "❌ cmakebuildsys did not produce a Makefile"
+            echo "--- cmakebuildsys log ---"
+            cat ~/cmakebuildsys.log
+            exit 1
+          fi
           echo "✅ CMake build files generated in $BUILD_DIR"
           ls "$BUILD_DIR"
 
@@ -302,20 +311,34 @@ jobs:
 
       - name: Build Kodi
         run: |
-          BUILD_DIR=~/kodi-build
+          BUILD_DIR=$HOME/kodi-build
           echo "🏗️ Building Kodi (this takes a while)..."
           make -C "$BUILD_DIR" -j$(nproc) 2>&1 | tee ~/kodi-build.log | tail -60
+          if [ $? -ne 0 ]; then
+            echo "❌ Build failed"
+            tail -100 ~/kodi-build.log
+            exit 1
+          fi
           echo "✅ Kodi compiled"
 
       - name: Package APK
         run: |
-          BUILD_DIR=~/kodi-build
+          # Per official Kodi Android docs, 'make apk' runs from the kodi source dir,
+          # NOT from the build dir. It invokes gradle in tools/android/packaging.
+          KODI_SRC=$HOME/kodi
+          BUILD_DIR=$HOME/kodi-build
           echo "📦 Packaging APK..."
-          make -C "$BUILD_DIR" apk 2>&1 | tee ~/apk-package.log | tail -30
+          cd "$KODI_SRC"
+          make -C "$BUILD_DIR" apk 2>&1 | tee ~/apk-package.log | tail -40
+          # Also try the gradle path directly if make apk doesn't work
+          if ! find ~ -name "*.apk" 2>/dev/null | grep -qv ".gradle"; then
+            echo "ℹ️ Trying gradle directly..."
+            cd "$KODI_SRC/tools/android/packaging"
+            ./gradlew assembleRelease 2>&1 | tee -a ~/apk-package.log | tail -40 || true
+          fi
           echo "--- APK search after packaging ---"
-          # Per official docs, APK lands in the kodi source root ($HOME/kodi)
           find ~ -name "*.apk" 2>/dev/null | grep -v ".gradle" | grep -v "/tmp/" | sort || echo "No APK found yet"
-          echo "✅ Packaging done"
+          echo "✅ Packaging step complete"
 
       - name: Locate built APK
         id: locate
@@ -327,9 +350,12 @@ jobs:
             | grep -v "aligned" \
             | head -1)
           if [ -z "$APK" ]; then
-            echo "❌ No APK found. Build log tail:"
-            tail -50 ~/apk-package.log 2>/dev/null || true
-            tail -50 ~/kodi-build.log 2>/dev/null || true
+            echo "❌ No APK found. Logs:"
+            tail -80 ~/apk-package.log 2>/dev/null || true
+            echo "--- Build dir contents ---"
+            ls -la $HOME/kodi-build/ 2>/dev/null || true
+            echo "--- Packaging dir contents ---"
+            ls -la $HOME/kodi/tools/android/packaging/ 2>/dev/null || true
             exit 1
           fi
           echo "✅ Found APK: $APK"
