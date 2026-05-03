@@ -25,6 +25,7 @@ In your fork, click the **Actions** tab → click **"I understand my workflows, 
 | App display name | Leave as `Kodi` or type your custom name (shown under the launcher icon) |
 | Package ID | Leave as `org.xbmc.kodi` unless you want both official + custom installed |
 | APK file name | Leave blank to auto-generate, or type a custom name e.g. `MyMedia-v1.0` |
+| Pre-enable Unknown sources | `true` — lets users install third-party addons without digging into settings |
 | Publish as Release | `true` — gives you a permanent download link |
 
 4. Click the green **Run workflow** button
@@ -60,9 +61,13 @@ Same as above but upload `splash.png` (1920×1080 recommended).
 4. Click **Commit changes**
 5. Trigger a new build — addons are baked in automatically
 
+### Pre-enable Unknown sources
+Set the **Pre-enable Unknown sources** option to `true` in the Run workflow form. This pre-enables the **Settings → System → Add-ons → Unknown sources** toggle so users can install third-party addons without having to find and enable it themselves. It can still be toggled off by the user after install.
+
 ### Pre-configure settings
 - Edit `kodi-config/advancedsettings.xml` for buffer size, playback settings, etc.
 - Edit `kodi-config/sources.xml` to pre-add network shares and media locations
+- Drop a custom `kodi-config/guisettings.xml` to fully override any Kodi GUI setting at first launch
 
 ---
 
@@ -92,6 +97,9 @@ Yes — change the Package ID to something like `com.myname.mykodi` in the build
 
 **Can I control what the APK file is named when I download it?**
 Yes — type anything in the **APK file name** field in the Run workflow form (e.g. `MyMedia-v1.0`). It saves as `MyMedia-v1.0.apk`. Leave it blank and it auto-generates as `{AppName}-{Branch}-{ABI}.apk`.
+
+**What does "Pre-enable Unknown sources" actually do?**
+It pre-sets the **Settings → System → Add-ons → Unknown sources** toggle to ON inside the APK, so users don't have to find and enable it manually before installing third-party addons. Users can still turn it off after install if they want.
 
 **Can I build for older devices?**
 Yes — choose `armeabi-v7a` in the build form for 32-bit older devices.

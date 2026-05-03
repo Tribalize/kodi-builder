@@ -34,6 +34,14 @@ on:
         description: 'APK file name (without .apk — leave blank to auto-generate)'
         required: false
         default: ''
+      unknown_sources:
+        description: 'Pre-enable Unknown sources (Settings > System > Add-ons)'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
       create_release:
         description: 'Publish as a GitHub Release when done?'
         required: true
@@ -203,6 +211,33 @@ jobs:
             echo "✅ sources.xml baked in"
           fi
 
+      - name: Bake in guisettings.xml (unknown sources + any user overrides)
+        run: |
+          USERDATA_SRC="${{ github.workspace }}/kodi-config/guisettings.xml"
+          UNKNOWN="${{ github.event.inputs.unknown_sources }}"
+          DEST=~/kodi/system/userdata/guisettings.xml
+          mkdir -p ~/kodi/system/userdata
+
+          # If the user has supplied their own full guisettings.xml, use it as base
+          if [ -f "$USERDATA_SRC" ]; then
+            cp "$USERDATA_SRC" "$DEST"
+            echo "📋 Using custom guisettings.xml as base"
+          else
+            # Generate a minimal guisettings.xml with just the settings we need
+            printf '%s\n'               '<?xml version="1.0" encoding="utf-8"?>'               '<settings version="2">'               '  <setting id="general.addonupdates" default="true">1</setting>'               '  <setting id="addons.unknownsources" default="true">false_PLACEHOLDER</setting>'               '</settings>' > "$DEST"
+          fi
+
+          # Inject the unknown sources value
+          if [ "$UNKNOWN" = "true" ]; then
+            sed -i 's/false_PLACEHOLDER/true/' "$DEST"
+            # Also handle case where file already had the setting
+            sed -i 's|<setting id="addons.unknownsources"[^>]*>false</setting>|<setting id="addons.unknownsources" default="true">true</setting>|g' "$DEST"
+            echo "✅ Unknown sources: ENABLED"
+          else
+            sed -i 's/false_PLACEHOLDER/false/' "$DEST"
+            echo "✅ Unknown sources: disabled (default)"
+          fi
+
       - name: Cache Kodi depends
         uses: actions/cache@v4
         with:
@@ -318,6 +353,7 @@ jobs:
             | APK filename | `${{ steps.sign.outputs.apk_name }}` |
             | Package ID | `${{ github.event.inputs.package_id }}` |
             | Target ABI | `${{ steps.abi.outputs.value }}` |
+            | Unknown sources | ${{ github.event.inputs.unknown_sources == 'true' && 'Pre-enabled' || 'Default (off)' }} |
             | Built | ${{ github.run_number }} |
 
             ### Install
