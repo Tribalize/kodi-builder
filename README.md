@@ -1,4 +1,10 @@
 # Kodi Android APK Builder
+
+> **Testing Notice**
+> This repository is for code testing only.
+> It is not actively maintained and may not receive continuous updates.
+> If you find issues, please fork this repository and fix them in your fork.
+
 ### Build a custom Kodi APK entirely in your browser — no software to install
 
 Everything happens on GitHub. You edit files here, click a button to build, and download the finished APK when it's ready.

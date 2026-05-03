@@ -196,6 +196,21 @@ jobs:
           echo "Verification:"
           grep -RIn "ALooper_poll(All|Once)\(" ~/kodi/xbmc/platform/android | head -50 || true
 
+      - name: Patch optical include mismatch for Android no-cdio builds
+        run: |
+          set -euo pipefail
+          FILE=~/kodi/xbmc/filesystem/FileFactory.cpp
+          if [ ! -f "$FILE" ]; then
+            echo "ℹ️ FileFactory.cpp not found at expected path, skipping optical patch"
+            exit 0
+          fi
+          # FileFactory includes CDDAFile.h unconditionally on some branches, but the
+          # build disables optical/cdio for Android. Guard the include to match
+          # ENABLE_OPTICAL=OFF and avoid pulling cdio headers.
+          sed -i 's@#include "CDDAFile.h"@#if defined(HAS_OPTICAL_DRIVE)\n#include "CDDAFile.h"\n#endif@' "$FILE"
+          echo "Verification of CDDA include guard in FileFactory.cpp:"
+          grep -n 'CDDAFile.h\|HAS_OPTICAL_DRIVE' "$FILE" | head -20 || true
+
       - name: Apply custom app name
         if: github.event.inputs.app_name != 'Kodi'
         run: |
