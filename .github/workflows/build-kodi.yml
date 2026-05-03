@@ -82,7 +82,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             git cmake ninja-build make nasm python3 \
-            curl unzip zip default-jdk-headless \
+            curl unzip zip openjdk-17-jdk-headless \
             autoconf libtool pkg-config yasm ccache \
             libgl1-mesa-dev libgles2-mesa-dev \
             2>&1 | tail -5
@@ -104,6 +104,12 @@ jobs:
           unzip -q /tmp/ndk.zip -d ~/
           rm /tmp/ndk.zip
           echo "✅ NDK ready"
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
