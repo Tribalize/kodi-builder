@@ -267,7 +267,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/kodi-depends
-          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v7
+          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v8
 
       - name: Configure and build Kodi depends
         run: |
@@ -293,6 +293,13 @@ jobs:
             cd "$DEPENDS_DIR"
             ./bootstrap
 
+            # Patch Makefile.include.in to use system cmake instead of building from source.
+            # Line 63 defines CMAKE= pointing to the depends-built binary.
+            # We replace it with the system cmake path so the depends build skips
+            # compiling cmake from source (which fails due to clang incompatibility).
+            sed -i "s|CMAKE=@prefix@/@tool_dir@/bin/cmake|CMAKE=$SYS_CMAKE|g" Makefile.include.in
+            echo "✅ Patched Makefile.include.in to use system cmake: $SYS_CMAKE"
+
             echo "⚙️ Configuring depends..."
             ./configure \
               --host="$HOST" \
@@ -303,16 +310,13 @@ jobs:
               --prefix="$DEPENDS_PREFIX" \
               --enable-debug=no
 
-            # Pre-populate the native cmake slot so the depends system
-            # finds it already built and skips the source compilation.
-            # The depends native/cmake Makefile checks for this binary before building.
+            # Verify the patch took effect in the generated Makefile.include
+            echo "CMAKE line in generated Makefile.include:"
+            grep "^CMAKE=" Makefile.include || echo "(not found)"
+
+            # Also place cmake symlink in the native bin for cmakebuildsys
             mkdir -p "$NATIVE_BIN"
             ln -sf "$SYS_CMAKE" "$NATIVE_BIN/cmake"
-            # Also create the "installed" marker file that make checks
-            mkdir -p "$DEPENDS_DIR/native/cmake/x86_64-linux-native"
-            touch "$DEPENDS_DIR/native/cmake/x86_64-linux-native/cmake"
-            touch "$DEPENDS_DIR/native/cmake/.installed-x86_64-linux-native"
-            echo "✅ Pre-installed system cmake at $NATIVE_BIN/cmake"
 
             # Redirect Rust env so runner's pre-installed Rust doesn't conflict
             export RUSTUP_HOME="$DEPENDS_PREFIX/x86_64-linux-gnu-native/.rustup"
