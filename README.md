@@ -66,8 +66,24 @@ Set the **Pre-enable Unknown sources** option to `true` in the Run workflow form
 
 ### Pre-configure settings
 - Edit `kodi-config/advancedsettings.xml` for buffer size, playback settings, etc.
-- Edit `kodi-config/sources.xml` to pre-add network shares and media locations
+- Edit `kodi-config/sources.xml` to pre-add media sources AND File Manager URL sources (see below)
 - Drop a custom `kodi-config/guisettings.xml` to fully override any Kodi GUI setting at first launch
+
+### Add File Manager URL sources
+The **System → File Manager** in Kodi lets you add named URL sources — addon repo URLs, SMB shares, FTP paths, etc. You can pre-populate these so they appear on first launch without the user having to type anything.
+
+Edit `kodi-config/sources.xml` in GitHub and add entries to the `<files>` section at the bottom of the file. The file already contains ready-to-use commented examples for every common type:
+
+| Type | Example path |
+|------|-------------|
+| HTTP addon repo | `https://example.com/kodi-repo/` |
+| HTTPS addon repo | `https://mirrors.kodi.tv/addons/omega/` |
+| SMB share (no auth) | `smb://192.168.1.100/shared/` |
+| SMB share (with login) | `smb://user:pass@192.168.1.100/private/` |
+| FTP server | `ftp://user:pass@ftp.example.com/path/` |
+| NFS share | `nfs://192.168.1.100/mnt/data/` |
+
+To add a source: open `kodi-config/sources.xml` → click the pencil ✏️ icon → find the relevant commented example → remove the `<!--` and `-->` comment markers → replace the name and path → commit → trigger a build.
 
 ---
 
@@ -100,6 +116,9 @@ Yes — type anything in the **APK file name** field in the Run workflow form (e
 
 **What does "Pre-enable Unknown sources" actually do?**
 It pre-sets the **Settings → System → Add-ons → Unknown sources** toggle to ON inside the APK, so users don't have to find and enable it manually before installing third-party addons. Users can still turn it off after install if they want.
+
+**How do I pre-add File Manager sources (repo URLs, network shares)?**
+Edit `kodi-config/sources.xml` and add entries to the `<files>` section. The file has ready-made commented examples for HTTP repos, SMB, FTP, and NFS. Uncomment the ones you need, fill in the URL and name, commit, and rebuild.
 
 **Can I build for older devices?**
 Yes — choose `armeabi-v7a` in the build form for 32-bit older devices.
