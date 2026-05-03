@@ -72,9 +72,15 @@ jobs:
           ABI="${RAW%% *}"
           echo "value=$ABI" >> $GITHUB_OUTPUT
           case "$ABI" in
-            arm64-v8a)   echo "triplet=aarch64-linux-android" >> $GITHUB_OUTPUT ;;
-            armeabi-v7a) echo "triplet=arm-linux-androideabi" >> $GITHUB_OUTPUT ;;
-            x86_64)      echo "triplet=x86_64-linux-android"  >> $GITHUB_OUTPUT ;;
+            arm64-v8a)
+              echo "triplet=aarch64-linux-android"   >> $GITHUB_OUTPUT
+              echo "target_dir=aarch64-linux-android-24-release" >> $GITHUB_OUTPUT ;;
+            armeabi-v7a)
+              echo "triplet=arm-linux-androideabi"   >> $GITHUB_OUTPUT
+              echo "target_dir=arm-linux-androideabi-24-release" >> $GITHUB_OUTPUT ;;
+            x86_64)
+              echo "triplet=x86_64-linux-android"    >> $GITHUB_OUTPUT
+              echo "target_dir=x86_64-linux-android-24-release"  >> $GITHUB_OUTPUT ;;
           esac
 
       - name: Install build dependencies
@@ -261,7 +267,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/kodi-depends
-          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v6
+          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v7
 
       - name: Configure and build Kodi depends
         run: |
@@ -271,26 +277,23 @@ jobs:
           NDK=$HOME/android-ndk-r26d
           HOST=${{ steps.abi.outputs.triplet }}
           SYS_CMAKE=$(which cmake)
+          NATIVE_BIN="$DEPENDS_PREFIX/x86_64-linux-gnu-native/bin"
 
           mkdir -p "$TARBALLS"
 
-          # The GitHub runner has Rust pre-installed which conflicts with the depends
-          # rustup build. Unset CARGO_HOME and point rustup at a temp dir to avoid
-          # "cannot install while Rust is installed" error.
-          export RUSTUP_HOME=$HOME/.rustup-depends
-          export CARGO_HOME=$HOME/.cargo-depends
+          TARGET_DIR="${{ steps.abi.outputs.target_dir }}"
 
-          # Cache hit is valid if the target prefix has libs and system cmake works
+          # Cache hit is valid if the target prefix has libs (works for all ABIs)
           if [ "${{ steps.depends-cache.outputs.cache-hit }}" = "true" ] && \
-             [ -d "$DEPENDS_PREFIX/aarch64-linux-android-24-release/lib" ] && \
-             [ "$(ls -A $DEPENDS_PREFIX/aarch64-linux-android-24-release/lib 2>/dev/null)" ]; then
+             [ -d "$DEPENDS_PREFIX/$TARGET_DIR/lib" ] && \
+             [ "$(ls -A $DEPENDS_PREFIX/$TARGET_DIR/lib 2>/dev/null)" ]; then
             echo "✅ Valid cached depends — skipping rebuild"
           else
             echo "📦 Bootstrapping depends..."
             cd "$DEPENDS_DIR"
             ./bootstrap
 
-            echo "⚙️ Configuring depends (using system cmake, skipping native cmake build)..."
+            echo "⚙️ Configuring depends..."
             ./configure \
               --host="$HOST" \
               --with-sdk-path="$ANDROID_HOME" \
@@ -298,30 +301,39 @@ jobs:
               --with-ndk-api=24 \
               --with-tarballs="$TARBALLS" \
               --prefix="$DEPENDS_PREFIX" \
-              --with-cmake="$SYS_CMAKE" \
               --enable-debug=no
 
-            echo "🔨 Building target libraries (60-90 min)..."
-            # Use SKIPNATIVE=1 to skip native tool builds (use system tools instead)
-            make -j$(nproc) SKIPNATIVE=1 2>&1 | tee ~/depends-target.log | \
-              grep -E "(^(make\[1\]|ERROR|Downloading|Configuring|Building)|error:)" | tail -80
+            # Pre-populate the native cmake slot so the depends system
+            # finds it already built and skips the source compilation.
+            # The depends native/cmake Makefile checks for this binary before building.
+            mkdir -p "$NATIVE_BIN"
+            ln -sf "$SYS_CMAKE" "$NATIVE_BIN/cmake"
+            # Also create the "installed" marker file that make checks
+            mkdir -p "$DEPENDS_DIR/native/cmake/x86_64-linux-native"
+            touch "$DEPENDS_DIR/native/cmake/x86_64-linux-native/cmake"
+            touch "$DEPENDS_DIR/native/cmake/.installed-x86_64-linux-native"
+            echo "✅ Pre-installed system cmake at $NATIVE_BIN/cmake"
+
+            # Redirect Rust env so runner's pre-installed Rust doesn't conflict
+            export RUSTUP_HOME="$DEPENDS_PREFIX/x86_64-linux-gnu-native/.rustup"
+            export CARGO_HOME="$DEPENDS_PREFIX/x86_64-linux-gnu-native/.cargo"
+
+            echo "🔨 Building depends (60-90 min first time)..."
+            make -j$(nproc) 2>&1 | tee ~/depends-build.log | \
+              grep -E "(^(make\[1\]:|ERROR|Building |Downloading )|error:)" | tail -80
             BUILD_EXIT=${PIPESTATUS[0]}
 
             if [ $BUILD_EXIT -ne 0 ]; then
               echo "❌ Depends build failed (exit $BUILD_EXIT)"
-              tail -100 ~/depends-target.log
+              tail -100 ~/depends-build.log
               exit 1
             fi
-            echo "✅ Target libraries built"
+            echo "✅ Depends built"
           fi
 
-          # Symlink system cmake into the native prefix so cmakebuildsys can find it
-          NATIVE_BIN="$DEPENDS_PREFIX/x86_64-linux-gnu-native/bin"
+          # Always ensure cmake symlink is in place (survives cache restore)
           mkdir -p "$NATIVE_BIN"
-          if [ ! -f "$NATIVE_BIN/cmake" ]; then
-            ln -sf "$SYS_CMAKE" "$NATIVE_BIN/cmake"
-            echo "✅ Symlinked system cmake → $NATIVE_BIN/cmake"
-          fi
+          ln -sf "$SYS_CMAKE" "$NATIVE_BIN/cmake"
           echo "cmake: $($NATIVE_BIN/cmake --version | head -1)"
 
       - name: Generate CMake build files via cmakebuildsys
