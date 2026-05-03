@@ -267,7 +267,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/kodi-depends
-          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v13
+          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v14
 
       - name: Configure and build Kodi depends
         run: |
@@ -333,15 +333,16 @@ jobs:
               --enable-debug=no
 
             # Remove samba and samba-gplv3 from the target Makefile.
-            # --disable-gplv3 skips samba-gplv3 but 'samba' (non-gplv3) may still be listed.
-            # Both fail to compile with Android clang due to IDL type errors.
-            grep -v '^	samba' target/Makefile | \
-              sed 's/ samba-gplv3 / /g' | sed 's/ samba-gplv3$//' | \
-              sed 's/ samba / /g' | sed 's/ samba$//' | \
-              sed 's/samba-gplv3 \\//' | sed 's/samba \\//' > target/Makefile.tmp
-            mv target/Makefile.tmp target/Makefile
-            echo "Removed samba from target/Makefile — samba refs remaining:"
-            grep -n "samba" target/Makefile | head -5 || echo "  none"
+            # Both fail with Android clang. Use sed with multiple passes for reliability.
+            # Pass 1: remove lines whose only content (after tab) is a samba target rule
+            sed -i '/^samba-gplv3:/,/^[^	]/{/^samba-gplv3:/d;/^	/d}' target/Makefile
+            sed -i '/^samba:/,/^[^	]/{/^samba:/d;/^	/d}' target/Makefile
+            # Pass 2: remove samba words from DEPENDS+= lines
+            sed -i 's/samba-gplv3//g; s/samba//g' target/Makefile
+            # Pass 3: clean up double spaces left behind
+            sed -i 's/  */ /g' target/Makefile
+            echo "Removed samba — remaining refs:"
+            grep -n "samba" target/Makefile | head -10 || echo "  none"
 
             # Place cmake symlink in the native bin for cmakebuildsys
             mkdir -p "$NATIVE_BIN"
