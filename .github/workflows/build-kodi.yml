@@ -267,7 +267,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/kodi-depends
-          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v8
+          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v9
 
       - name: Configure and build Kodi depends
         run: |
@@ -293,12 +293,19 @@ jobs:
             cd "$DEPENDS_DIR"
             ./bootstrap
 
-            # Patch Makefile.include.in to use system cmake instead of building from source.
-            # Line 63 defines CMAKE= pointing to the depends-built binary.
-            # We replace it with the system cmake path so the depends build skips
-            # compiling cmake from source (which fails due to clang incompatibility).
+            # Patch Makefile.include.in so cmakebuildsys uses system cmake path
             sed -i "s|CMAKE=@prefix@/@tool_dir@/bin/cmake|CMAKE=$SYS_CMAKE|g" Makefile.include.in
-            echo "✅ Patched Makefile.include.in to use system cmake: $SYS_CMAKE"
+            echo "✅ Patched Makefile.include.in: CMAKE=$SYS_CMAKE"
+
+            # Replace the native cmake Makefile with a stub that installs the system cmake.
+            # The real Makefile tries to build cmake from source using CC=clang which fails.
+            printf 'PLATFORM = x86_64-linux-native\n' > native/cmake/Makefile
+            printf 'all: .installed-$$(PLATFORM)\n\n' >> native/cmake/Makefile
+            printf '$$(PLATFORM):\n\tmkdir -p $$(PLATFORM)/bin\n\n' >> native/cmake/Makefile
+            printf '$$(PLATFORM)/bin/cmake: $$(PLATFORM)\n\tcp -f $$(shell which cmake) $$(PLATFORM)/bin/cmake\n\n' >> native/cmake/Makefile
+            printf '.installed-$$(PLATFORM): $$(PLATFORM)/bin/cmake\n\tmkdir -p $$(PREFIX)/bin\n\tcp -f $$(PLATFORM)/bin/cmake $$(PREFIX)/bin/cmake\n\ttouch .installed-$$(PLATFORM)\n\n' >> native/cmake/Makefile
+            printf 'clean:\n\trm -rf $$(PLATFORM) .installed-$$(PLATFORM)\n' >> native/cmake/Makefile
+            echo "✅ Replaced native/cmake/Makefile with stub"
 
             echo "⚙️ Configuring depends..."
             ./configure \
@@ -310,11 +317,7 @@ jobs:
               --prefix="$DEPENDS_PREFIX" \
               --enable-debug=no
 
-            # Verify the patch took effect in the generated Makefile.include
-            echo "CMAKE line in generated Makefile.include:"
-            grep "^CMAKE=" Makefile.include || echo "(not found)"
-
-            # Also place cmake symlink in the native bin for cmakebuildsys
+            # Place cmake symlink in the native bin for cmakebuildsys
             mkdir -p "$NATIVE_BIN"
             ln -sf "$SYS_CMAKE" "$NATIVE_BIN/cmake"
 
