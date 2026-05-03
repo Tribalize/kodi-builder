@@ -267,7 +267,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/kodi-depends
-          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v18
+          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v19
 
       - name: Configure and build Kodi depends
         run: |
@@ -361,6 +361,7 @@ jobs:
             SKIP_PKGS="$SKIP_PKGS dbus libuuid alsa-lib libdrm"
             SKIP_PKGS="$SKIP_PKGS libxkbcommon libinput libudev libevdev mtdev"
             SKIP_PKGS="$SKIP_PKGS wayland waylandpp wayland-protocols"
+            SKIP_PKGS="$SKIP_PKGS gnutls"  # Uses tzalloc/mktime_z not in Android bionic; Kodi uses OpenSSL
             for pkg in $SKIP_PKGS; do
               # Remove make rule block for this package
               sed -i "/^${pkg}:/,/^[^	]/{/^${pkg}:/d;/^	/d}" target/Makefile
