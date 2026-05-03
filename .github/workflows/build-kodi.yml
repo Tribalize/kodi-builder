@@ -246,33 +246,57 @@ jobs:
             echo "✅ Unknown sources: disabled (default)"
           fi
 
+      - name: Cache source tarballs
+        uses: actions/cache@v5
+        with:
+          path: ~/kodi-tarballs
+          key: kodi-tarballs-${{ github.event.inputs.branch }}-v1
+
       - name: Cache Kodi depends
         id: depends-cache
         uses: actions/cache@v5
         with:
           path: ~/kodi-depends
-          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v4
+          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v5
 
       - name: Configure and build Kodi depends
         run: |
-          DEPENDS_DIR=~/kodi/tools/depends
-          DEPENDS_PREFIX=~/kodi-depends
-          NDK=~/android-ndk-r26d
+          DEPENDS_DIR=$HOME/kodi/tools/depends
+          DEPENDS_PREFIX=$HOME/kodi-depends
+          TARBALLS=$HOME/kodi-tarballs
+          NDK=$HOME/android-ndk-r26d
           HOST=${{ steps.abi.outputs.triplet }}
+          NATIVE_CMAKE="$DEPENDS_PREFIX/x86_64-linux-gnu-native/bin/cmake"
 
-          # Check if cached depends are valid (have lib/ populated)
-          if [ "${{ steps.depends-cache.outputs.cache-hit }}" = "true" ] &&              [ -d "$DEPENDS_PREFIX/lib" ] &&              [ "$(ls -A $DEPENDS_PREFIX/lib 2>/dev/null)" ]; then
-            echo "✅ Valid cached depends found — skipping rebuild"
+          mkdir -p "$TARBALLS"
+
+          # Cache is valid only if native cmake binary exists (proves native tools were built)
+          if [ "${{ steps.depends-cache.outputs.cache-hit }}" = "true" ] && [ -x "$NATIVE_CMAKE" ]; then
+            echo "✅ Valid cached depends found (native cmake present) — skipping rebuild"
           else
-            echo "📦 Bootstrapping and configuring depends..."
+            echo "📦 Bootstrapping depends..."
             cd "$DEPENDS_DIR"
             ./bootstrap
 
-            ./configure               --host="$HOST"               --with-sdk-path="$ANDROID_HOME"               --with-ndk-path="$NDK"               --with-ndk-api=24               --prefix="$DEPENDS_PREFIX"               --enable-debug=no
+            echo "⚙️ Configuring depends..."
+            ./configure               --host="$HOST"               --with-sdk-path="$ANDROID_HOME"               --with-ndk-path="$NDK"               --with-ndk-api=24               --with-tarballs="$TARBALLS"               --prefix="$DEPENDS_PREFIX"               --enable-debug=no
 
-            echo "🔨 Building depends (60-90 min on first run)..."
-            make -j$(nproc) 2>&1 | tee ~/depends-build.log |               grep -E "(^(make|Making|Building|ERROR)|error:)" | tail -60
-            echo "✅ Depends built"
+            echo "🔨 Building native tools (cmake, gas-preprocessor, etc.)..."
+            make -j$(nproc) -C native 2>&1 | tee ~/depends-native.log |               grep -E "(^(make|ERROR)|error:)" | tail -30
+            echo "✅ Native tools built"
+
+            echo "🔨 Building target libraries (60-90 min)..."
+            make -j$(nproc) 2>&1 | tee ~/depends-target.log |               grep -E "(^(make|ERROR)|error:)" | tail -60
+            echo "✅ Target libraries built"
+
+            # Verify native cmake is present
+            if [ ! -x "$NATIVE_CMAKE" ]; then
+              echo "❌ Native cmake not found at $NATIVE_CMAKE after build"
+              echo "Contents of native bin:"
+              ls "$DEPENDS_PREFIX/x86_64-linux-gnu-native/bin/" 2>/dev/null || echo "  (directory not found)"
+              exit 1
+            fi
+            echo "✅ Native cmake confirmed: $NATIVE_CMAKE"
           fi
 
       - name: Generate CMake build files via cmakebuildsys
