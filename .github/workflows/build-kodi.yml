@@ -63,7 +63,7 @@ jobs:
 
     steps:
       - name: Checkout config repo
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v5
 
       - name: Parse ABI selection
         id: abi
@@ -89,7 +89,7 @@ jobs:
           echo "✅ System packages installed"
 
       - name: Cache Android NDK
-        uses: actions/cache@v4.2.3
+        uses: actions/cache@v5
         id: ndk-cache
         with:
           path: ~/android-ndk-r26d
@@ -106,12 +106,12 @@ jobs:
           echo "✅ NDK ready"
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3.2.1
+        uses: android-actions/setup-android@v4
         with:
           packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
 
       - name: Cache Kodi source
-        uses: actions/cache@v4.2.3
+        uses: actions/cache@v5
         with:
           path: ~/kodi
           key: kodi-src-${{ github.event.inputs.branch }}-${{ hashFiles('.github/workflows/build-kodi.yml') }}
@@ -241,7 +241,7 @@ jobs:
           fi
 
       - name: Cache Kodi depends
-        uses: actions/cache@v4.2.3
+        uses: actions/cache@v5
         with:
           path: ~/kodi-depends
           key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v2
@@ -333,7 +333,7 @@ jobs:
           echo "apk_name=$OUT_NAME" >> $GITHUB_OUTPUT
 
       - name: Upload APK as artifact
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.sign.outputs.apk_name }}
           path: ${{ steps.sign.outputs.apk_path }}
@@ -341,7 +341,7 @@ jobs:
 
       - name: Publish GitHub Release
         if: github.event.inputs.create_release == 'true'
-        uses: softprops/action-gh-release@v2.2.2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: build-${{ github.run_number }}
           name: "${{ github.event.inputs.app_name }} ${{ github.event.inputs.branch }} — Build #${{ github.run_number }}"
