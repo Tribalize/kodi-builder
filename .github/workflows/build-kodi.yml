@@ -414,9 +414,23 @@ jobs:
           export PATH="$NATIVE_BIN:$PATH"
           echo "cmake in PATH: $(which cmake) — $(cmake --version | head -1)"
           cd $HOME/kodi
+          # Disable features we skipped in depends (libcdio=optical, gnutls/microhttpd=webserver, etc.)
+          # These must be OFF or cmake will fail with "Could NOT find" errors.
+          KODI_CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release"
+          KODI_CMAKE_ARGS="$KODI_CMAKE_ARGS -DENABLE_OPTICAL=OFF"
+          KODI_CMAKE_ARGS="$KODI_CMAKE_ARGS -DENABLE_MICROHTTPD=OFF"
+          KODI_CMAKE_ARGS="$KODI_CMAKE_ARGS -DENABLE_UPNP=OFF"
+          KODI_CMAKE_ARGS="$KODI_CMAKE_ARGS -DENABLE_DBUS=OFF"
+          KODI_CMAKE_ARGS="$KODI_CMAKE_ARGS -DENABLE_ALSA=OFF"
+          KODI_CMAKE_ARGS="$KODI_CMAKE_ARGS -DENABLE_UDEV=OFF"
+          KODI_CMAKE_ARGS="$KODI_CMAKE_ARGS -DENABLE_LIRC=OFF"
+          KODI_CMAKE_ARGS="$KODI_CMAKE_ARGS -DENABLE_CEC=OFF"
+          KODI_CMAKE_ARGS="$KODI_CMAKE_ARGS -DENABLE_PULSEAUDIO=OFF"
+          KODI_CMAKE_ARGS="$KODI_CMAKE_ARGS -DENABLE_PIPEWIRE=OFF"
+          KODI_CMAKE_ARGS="$KODI_CMAKE_ARGS -DENABLE_SMBCLIENT=OFF"
           make -C tools/depends/target/cmakebuildsys \
             BUILD_DIR="$BUILD_DIR" \
-            CMAKE_EXTRA_ARGUMENTS="-DCMAKE_BUILD_TYPE=Release" \
+            CMAKE_EXTRA_ARGUMENTS="$KODI_CMAKE_ARGS" \
             2>&1 | tee ~/cmakebuildsys.log | tail -40
           # Verify a Makefile was actually generated
           if [ ! -f "$BUILD_DIR/Makefile" ]; then
