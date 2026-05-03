@@ -50,6 +50,14 @@ on:
         options:
           - 'true'
           - 'false'
+      debug_mode:
+        description: 'Enable verbose diagnostics and upload logs artifact'
+        required: true
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 jobs:
   build:
@@ -64,6 +72,26 @@ jobs:
     steps:
       - name: Checkout config repo
         uses: actions/checkout@v5
+
+      - name: Diagnostic preflight
+        if: github.event.inputs.debug_mode == 'true'
+        run: |
+          set -euo pipefail
+          echo "=== Runner / system ==="
+          uname -a || true
+          lsb_release -a || true
+          echo "=== CPU / memory / disk ==="
+          nproc || true
+          free -h || true
+          df -h || true
+          echo "=== Tool versions ==="
+          cmake --version || true
+          java -version || true
+          clang --version || true
+          rustc --version || true
+          cargo --version || true
+          echo "=== Environment snapshot ==="
+          env | sort | grep -E '^(ANDROID|JAVA|GITHUB|RUNNER|HOME|PATH)=' || true
 
       - name: Parse ABI selection
         id: abi
@@ -391,15 +419,14 @@ jobs:
 
             echo "🔨 Building depends (60-90 min first time)..."
             set +e
-            make -j$(nproc) 2>&1 | tee ~/depends-build.log | \
-              grep -E "(^(make\[1\]:|ERROR|Building |Downloading )|error:)" | tail -80
+            make -j$(nproc) 2>&1 | tee ~/depends-build.log
             BUILD_EXIT=${PIPESTATUS[0]}
             set -e
 
             if [ $BUILD_EXIT -ne 0 ]; then
               echo "❌ Depends build failed (exit $BUILD_EXIT)"
               tail -100 ~/depends-build.log
-              exit 1
+              exit $BUILD_EXIT
             fi
             echo "✅ Depends built"
           fi
@@ -463,7 +490,7 @@ jobs:
           make -C tools/depends/target/cmakebuildsys \
             BUILD_DIR="$BUILD_DIR" \
             CMAKE_EXTRA_ARGUMENTS="$KODI_CMAKE_ARGS" \
-            2>&1 | tee ~/cmakebuildsys.log | tail -40
+            2>&1 | tee ~/cmakebuildsys.log
           CMAKEGEN_EXIT=${PIPESTATUS[0]}
           set -e
           if [ $CMAKEGEN_EXIT -ne 0 ]; then
@@ -502,7 +529,8 @@ jobs:
           BUILD_DIR=$HOME/kodi-build
           echo "🏗️ Building Kodi (this takes a while)..."
           set +e
-          make -C "$BUILD_DIR" -j$(nproc) 2>&1 | tee ~/kodi-build.log | tail -60
+          # Stream output live so long compiles do not look idle in Actions logs.
+          make -C "$BUILD_DIR" -j$(nproc) 2>&1 | tee ~/kodi-build.log
           BUILD_EXIT=${PIPESTATUS[0]}
           set -e
           if [ $BUILD_EXIT -ne 0 ]; then
@@ -520,12 +548,12 @@ jobs:
           BUILD_DIR=$HOME/kodi-build
           echo "📦 Packaging APK..."
           cd "$KODI_SRC"
-          make -C "$BUILD_DIR" apk 2>&1 | tee ~/apk-package.log | tail -40
+          make -C "$BUILD_DIR" apk 2>&1 | tee ~/apk-package.log
           # Also try the gradle path directly if make apk doesn't work
           if ! find ~ -name "*.apk" 2>/dev/null | grep -qv ".gradle"; then
             echo "ℹ️ Trying gradle directly..."
             cd "$KODI_SRC/tools/android/packaging"
-            ./gradlew assembleRelease 2>&1 | tee -a ~/apk-package.log | tail -40 || true
+            ./gradlew assembleRelease 2>&1 | tee -a ~/apk-package.log || true
           fi
           echo "--- APK search after packaging ---"
           find ~ -name "*.apk" 2>/dev/null | grep -v ".gradle" | grep -v "/tmp/" | sort || echo "No APK found yet"
@@ -626,3 +654,40 @@ jobs:
           files: ${{ steps.sign.outputs.apk_path }}
           draft: false
           prerelease: false
+
+      - name: Collect diagnostic bundle
+        if: always() && github.event.inputs.debug_mode == 'true'
+        run: |
+          set -euo pipefail
+          OUT=/tmp/kodi-build-diagnostics
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          cp -f ~/depends-build.log "$OUT/" 2>/dev/null || true
+          cp -f ~/cmakebuildsys.log "$OUT/" 2>/dev/null || true
+          cp -f ~/kodi-build.log "$OUT/" 2>/dev/null || true
+          cp -f ~/apk-package.log "$OUT/" 2>/dev/null || true
+          {
+            echo "branch=${{ github.event.inputs.branch }}"
+            echo "abi=${{ github.event.inputs.abi }}"
+            echo "run_id=${{ github.run_id }}"
+            echo "run_number=${{ github.run_number }}"
+            echo "workflow=${{ github.workflow }}"
+          } > "$OUT/run-meta.txt"
+          if [ -d "$HOME/kodi-build" ]; then
+            ls -la "$HOME/kodi-build" > "$OUT/kodi-build-ls.txt" || true
+          fi
+          if [ -f "$HOME/kodi-build/CMakeCache.txt" ]; then
+            cp "$HOME/kodi-build/CMakeCache.txt" "$OUT/" || true
+          fi
+          if [ -d "$HOME/kodi/tools/depends/target/cmakebuildsys" ]; then
+            ls -la "$HOME/kodi/tools/depends/target/cmakebuildsys" > "$OUT/cmakebuildsys-ls.txt" || true
+          fi
+          tar -czf /tmp/kodi-build-diagnostics.tgz -C /tmp kodi-build-diagnostics
+
+      - name: Upload diagnostics artifact
+        if: always() && github.event.inputs.debug_mode == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodi-build-diagnostics-${{ github.run_number }}
+          path: /tmp/kodi-build-diagnostics.tgz
+          retention-days: 14
