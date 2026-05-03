@@ -106,7 +106,7 @@ jobs:
           echo "✅ NDK ready"
 
       - name: Setup Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -250,20 +250,27 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/kodi-depends
-          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v2
+          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v3
 
       - name: Build Kodi depends
         run: |
-          echo "🔨 Building depends (cached if unchanged)..."
+          echo "🔨 Building depends..."
           mkdir -p ~/kodi-depends
-          make -C ~/kodi/tools/depends -j$(nproc) \
-            PREFIX=~/kodi-depends \
-            TARGET_PLATFORM=android \
-            TARGET_ARCH=${{ steps.abi.outputs.triplet }} \
-            ANDROID_NDK=~/android-ndk-r26d \
-            ANDROID_SDK=$ANDROID_HOME \
-            2>&1 | grep -E "^(make|Building|ERROR|error:)" | tail -30
-          echo "✅ Depends built"
+
+          # Check if cache restored a valid depends tree (has at least lib/ populated)
+          if [ -d ~/kodi-depends/lib ] && [ "$(ls -A ~/kodi-depends/lib 2>/dev/null)" ]; then
+            echo "✅ Valid depends cache found — skipping rebuild"
+          else
+            echo "📦 Building depends from scratch (this takes 60-90 min)..."
+            make -C ~/kodi/tools/depends -j$(nproc) \
+              PREFIX=~/kodi-depends \
+              TARGET_PLATFORM=android \
+              TARGET_ARCH=${{ steps.abi.outputs.triplet }} \
+              ANDROID_NDK=~/android-ndk-r26d \
+              ANDROID_SDK=$ANDROID_HOME \
+              2>&1 | tee ~/depends-build.log | grep -E "(^make|ERROR|error:)" | tail -50
+            echo "✅ Depends built"
+          fi
 
       - name: Create signing keystore
         run: |
@@ -282,6 +289,7 @@ jobs:
       - name: CMake configure
         run: |
           echo "⚙️ Configuring build..."
+          DEPENDS_PREFIX=~/kodi-depends
           cmake -S ~/kodi -B ~/kodi-cmake \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -290,15 +298,20 @@ jobs:
             -DANDROID_NDK=~/android-ndk-r26d \
             -DANDROID_SDK=$ANDROID_HOME \
             -DANDROID_SDK_TOOLCHAIN_VER=34.0.0 \
-            2>&1 | tail -10
+            -DCMAKE_FIND_ROOT_PATH=$DEPENDS_PREFIX \
+            -DDEPENDS_PATH=$DEPENDS_PREFIX \
+            -DNATIVEPREFIX=$DEPENDS_PREFIX/native \
+            2>&1 | tail -20
           echo "✅ CMake configured"
 
       - name: Build APK
         run: |
           echo "🏗️ Building APK (this takes a while)..."
-          cmake --build ~/kodi-cmake --target apk -j$(nproc) \
-            2>&1 | grep -E "(Building|Linking|error:|warning: )" | tail -40
-          echo "✅ Build complete"
+          cmake --build ~/kodi-cmake --target apk -j$(nproc) 2>&1 | tee ~/apk-build.log | tail -60
+          # Confirm APK was actually produced somewhere
+          echo "--- APK search after build ---"
+          find ~ -name "*.apk" 2>/dev/null | grep -v ".gradle" | grep -v "/tmp/" || echo "No APK yet"
+          echo "✅ Build step complete"
 
       - name: Locate built APK
         id: locate
