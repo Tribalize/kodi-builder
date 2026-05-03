@@ -247,30 +247,44 @@ jobs:
           fi
 
       - name: Cache Kodi depends
+        id: depends-cache
         uses: actions/cache@v5
         with:
           path: ~/kodi-depends
-          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v3
+          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v4
 
-      - name: Build Kodi depends
+      - name: Configure and build Kodi depends
         run: |
-          echo "🔨 Building depends..."
-          mkdir -p ~/kodi-depends
+          DEPENDS_DIR=~/kodi/tools/depends
+          DEPENDS_PREFIX=~/kodi-depends
+          NDK=~/android-ndk-r26d
+          HOST=${{ steps.abi.outputs.triplet }}
 
-          # Check if cache restored a valid depends tree (has at least lib/ populated)
-          if [ -d ~/kodi-depends/lib ] && [ "$(ls -A ~/kodi-depends/lib 2>/dev/null)" ]; then
-            echo "✅ Valid depends cache found — skipping rebuild"
+          # Check if cached depends are valid (have lib/ populated)
+          if [ "${{ steps.depends-cache.outputs.cache-hit }}" = "true" ] &&              [ -d "$DEPENDS_PREFIX/lib" ] &&              [ "$(ls -A $DEPENDS_PREFIX/lib 2>/dev/null)" ]; then
+            echo "✅ Valid cached depends found — skipping rebuild"
           else
-            echo "📦 Building depends from scratch (this takes 60-90 min)..."
-            make -C ~/kodi/tools/depends -j$(nproc) \
-              PREFIX=~/kodi-depends \
-              TARGET_PLATFORM=android \
-              TARGET_ARCH=${{ steps.abi.outputs.triplet }} \
-              ANDROID_NDK=~/android-ndk-r26d \
-              ANDROID_SDK=$ANDROID_HOME \
-              2>&1 | tee ~/depends-build.log | grep -E "(^make|ERROR|error:)" | tail -50
+            echo "📦 Bootstrapping and configuring depends..."
+            cd "$DEPENDS_DIR"
+            ./bootstrap
+
+            ./configure               --host="$HOST"               --with-sdk-path="$ANDROID_HOME"               --with-ndk-path="$NDK"               --with-ndk-api=24               --prefix="$DEPENDS_PREFIX"               --enable-debug=no
+
+            echo "🔨 Building depends (60-90 min on first run)..."
+            make -j$(nproc) 2>&1 | tee ~/depends-build.log |               grep -E "(^(make|Making|Building|ERROR)|error:)" | tail -60
             echo "✅ Depends built"
           fi
+
+      - name: Generate CMake build files via cmakebuildsys
+        run: |
+          # Kodi requires cmake to be invoked via its own depends-built helper,
+          # not system cmake. cmakebuildsys sets up the correct toolchain file.
+          BUILD_DIR=~/kodi-build
+          mkdir -p "$BUILD_DIR"
+          cd ~/kodi
+          make -C tools/depends/target/cmakebuildsys             BUILD_DIR="$BUILD_DIR"             CMAKE_EXTRA_ARGUMENTS="-DCMAKE_BUILD_TYPE=Release"             2>&1 | tail -30
+          echo "✅ CMake build files generated in $BUILD_DIR"
+          ls "$BUILD_DIR"
 
       - name: Create signing keystore
         run: |
@@ -286,50 +300,36 @@ jobs:
             > /dev/null 2>&1
           echo "✅ Debug signing key created"
 
-      - name: CMake configure
+      - name: Build Kodi
         run: |
-          echo "⚙️ Configuring build..."
-          DEPENDS_PREFIX=~/kodi-depends
-          cmake -S ~/kodi -B ~/kodi-cmake \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCORE_PLATFORM_NAME=android \
-            -DANDROID_ABI=${{ steps.abi.outputs.value }} \
-            -DANDROID_NDK=~/android-ndk-r26d \
-            -DANDROID_SDK=$ANDROID_HOME \
-            -DANDROID_SDK_TOOLCHAIN_VER=34.0.0 \
-            -DCMAKE_FIND_ROOT_PATH=$DEPENDS_PREFIX \
-            -DDEPENDS_PATH=$DEPENDS_PREFIX \
-            -DNATIVEPREFIX=$DEPENDS_PREFIX/native \
-            2>&1 | tail -20
-          echo "✅ CMake configured"
+          BUILD_DIR=~/kodi-build
+          echo "🏗️ Building Kodi (this takes a while)..."
+          make -C "$BUILD_DIR" -j$(nproc) 2>&1 | tee ~/kodi-build.log | tail -60
+          echo "✅ Kodi compiled"
 
-      - name: Build APK
+      - name: Package APK
         run: |
-          echo "🏗️ Building APK (this takes a while)..."
-          cmake --build ~/kodi-cmake --target apk -j$(nproc) 2>&1 | tee ~/apk-build.log | tail -60
-          # Confirm APK was actually produced somewhere
-          echo "--- APK search after build ---"
-          find ~ -name "*.apk" 2>/dev/null | grep -v ".gradle" | grep -v "/tmp/" || echo "No APK yet"
-          echo "✅ Build step complete"
+          BUILD_DIR=~/kodi-build
+          echo "📦 Packaging APK..."
+          make -C "$BUILD_DIR" apk 2>&1 | tee ~/apk-package.log | tail -30
+          echo "--- APK search after packaging ---"
+          # Per official docs, APK lands in the kodi source root ($HOME/kodi)
+          find ~ -name "*.apk" 2>/dev/null | grep -v ".gradle" | grep -v "/tmp/" | sort || echo "No APK found yet"
+          echo "✅ Packaging done"
 
       - name: Locate built APK
         id: locate
         run: |
-          echo "🔍 Searching for APK files..."
-          # Kodi's apk target can place the output in several locations depending on version:
-          #   ~/kodi/tools/android/packaging/
-          #   ~/kodi-cmake/
-          #   $HOME directly
-          # Search the whole home dir to be safe, exclude gradle caches and temp files
-          find ~ -name "*.apk" 2>/dev/null             | grep -v "\.gradle"             | grep -v "/tmp/"             | grep -v "aligned"             | sort
-          APK=$(find ~ -name "*.apk" 2>/dev/null             | grep -v "\.gradle"             | grep -v "/tmp/"             | grep -v "aligned"             | head -1)
+          echo "🔍 Locating final APK..."
+          APK=$(find ~ -name "*.apk" 2>/dev/null \
+            | grep -v ".gradle" \
+            | grep -v "/tmp/" \
+            | grep -v "aligned" \
+            | head -1)
           if [ -z "$APK" ]; then
-            echo "❌ No APK found anywhere under $HOME"
-            echo "Contents of ~/kodi/tools/android/packaging (if exists):"
-            ls -la ~/kodi/tools/android/packaging/ 2>/dev/null || echo "  (not found)"
-            echo "Contents of ~/kodi-cmake (top level):"
-            ls -la ~/kodi-cmake/ 2>/dev/null || echo "  (not found)"
+            echo "❌ No APK found. Build log tail:"
+            tail -50 ~/apk-package.log 2>/dev/null || true
+            tail -50 ~/kodi-build.log 2>/dev/null || true
             exit 1
           fi
           echo "✅ Found APK: $APK"
