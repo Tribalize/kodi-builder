@@ -613,18 +613,40 @@ jobs:
 
       - name: Package APK
         run: |
+          set -euo pipefail
           # Per official Kodi Android docs, 'make apk' runs from the kodi source dir,
           # NOT from the build dir. It invokes gradle in tools/android/packaging.
           KODI_SRC=$HOME/kodi
           BUILD_DIR=$HOME/kodi-build
           echo "📦 Packaging APK..."
+
+          # Fail-safe: ensure Gradle's expected keystore exists at package time.
+          mkdir -p ~/.android
+          if [ ! -f ~/.android/debug.keystore ]; then
+            if [ -f ~/.android/kodi.keystore ]; then
+              cp -f ~/.android/kodi.keystore ~/.android/debug.keystore
+            else
+              keytool -genkey -v \
+                -keystore ~/.android/debug.keystore \
+                -alias androiddebugkey \
+                -keyalg RSA -keysize 2048 \
+                -validity 10000 \
+                -storepass android \
+                -keypass android \
+                -dname "CN=Android Debug,O=Android,C=US" \
+                > /dev/null 2>&1
+            fi
+          fi
+          ls -la ~/.android || true
+
           cd "$KODI_SRC"
           make -C "$BUILD_DIR" apk 2>&1 | tee ~/apk-package.log
           # Also try the gradle path directly if make apk doesn't work
           if ! find ~ -name "*.apk" 2>/dev/null | grep -qv ".gradle"; then
             echo "ℹ️ Trying gradle directly..."
             cd "$KODI_SRC/tools/android/packaging"
-            ./gradlew :xbmc:assembleRelease 2>&1 | tee -a ~/apk-package.log || true
+            ./gradlew :xbmc:assembleRelease 2>&1 | tee -a ~/apk-package.log || \
+            ./gradlew assembleRelease 2>&1 | tee -a ~/apk-package.log || true
           fi
           echo "--- APK search after packaging ---"
           find ~ -name "*.apk" 2>/dev/null | grep -v ".gradle" | grep -v "/tmp/" | sort || echo "No APK found yet"
