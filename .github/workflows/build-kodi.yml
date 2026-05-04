@@ -257,10 +257,17 @@ jobs:
           ICON="${{ github.workspace }}/kodi-config/icon.png"
           if [ -f "$ICON" ]; then
             echo "🖼️ Applying custom icon..."
-            cp "$ICON" ~/kodi/tools/android/packaging/xbmc/res/drawable-xhdpi/ic_launcher.png
-            cp "$ICON" ~/kodi/tools/android/packaging/xbmc/res/drawable-xxhdpi/ic_launcher.png
-            cp "$ICON" ~/kodi/tools/android/packaging/xbmc/res/drawable-xxxhdpi/ic_launcher.png
-            echo "✅ Icon applied"
+            # The APK packaging Makefile.in reads icons from media/drawable-*/
+            # in the packaging dir, NOT from xbmc/res/. It then copies them
+            # into xbmc/res/ during the 'res' target. So we must replace the
+            # source files in media/ to survive the packaging pipeline.
+            MEDIA=~/kodi/tools/android/packaging/media
+            for d in drawable-hdpi drawable-ldpi drawable-mdpi drawable-xhdpi drawable-xxhdpi drawable-xxxhdpi; do
+              if [ -d "$MEDIA/$d" ]; then
+                cp "$ICON" "$MEDIA/$d/ic_launcher.png"
+              fi
+            done
+            echo "✅ Icon applied to all density buckets"
           else
             echo "ℹ️ No custom icon found (kodi-config/icon.png) — using default"
           fi
@@ -270,8 +277,13 @@ jobs:
           SPLASH="${{ github.workspace }}/kodi-config/splash.png"
           if [ -f "$SPLASH" ]; then
             echo "🖼️ Applying custom splash..."
-            cp "$SPLASH" ~/kodi/media/splash.png
-            echo "✅ Splash applied"
+            # Kodi has two splash images:
+            # 1. media/splash.jpg — the in-app splash shown by Kodi itself (bundled in assets)
+            # 2. media/applaunch_screen.png — the Android launch drawable (shown instantly by OS)
+            # Both live in the source media/ dir and get packaged via different paths.
+            cp "$SPLASH" ~/kodi/media/splash.jpg
+            cp "$SPLASH" ~/kodi/media/applaunch_screen.png
+            echo "✅ Splash applied (both in-app and Android launch screen)"
           else
             echo "ℹ️ No custom splash found (kodi-config/splash.png) — using default"
           fi
@@ -304,18 +316,21 @@ jobs:
         run: |
           SRC="${{ github.workspace }}/kodi-config/advancedsettings.xml"
           if [ -f "$SRC" ]; then
-            mkdir -p ~/kodi/system
-            cp "$SRC" ~/kodi/system/advancedsettings.xml
-            echo "✅ advancedsettings.xml baked in"
+            # Kodi reads advancedsettings.xml from userdata/ at runtime, not system/.
+            # The cmake install_data includes userdata/* (common.txt line 13),
+            # so files here get bundled into the APK assets automatically.
+            mkdir -p ~/kodi/userdata
+            cp "$SRC" ~/kodi/userdata/advancedsettings.xml
+            echo "✅ advancedsettings.xml baked into userdata/"
           fi
 
       - name: Bake in sources.xml
         run: |
           SRC="${{ github.workspace }}/kodi-config/sources.xml"
           if [ -f "$SRC" ]; then
-            mkdir -p ~/kodi/system
-            cp "$SRC" ~/kodi/system/sources.xml
-            echo "✅ sources.xml baked in"
+            mkdir -p ~/kodi/userdata
+            cp "$SRC" ~/kodi/userdata/sources.xml
+            echo "✅ sources.xml baked into userdata/"
           fi
 
       - name: Bake in guisettings.xml (unknown sources + any user overrides)
@@ -654,53 +669,16 @@ jobs:
           fi
           echo "✅ Kodi compiled"
 
-      - name: Inject custom config into packaged build tree
+      - name: Inject custom config into APK assets and package
         run: |
           set -euo pipefail
           BUILD_DIR=$HOME/kodi-build
-          USERDATA_DIR="$BUILD_DIR/userdata"
-          ADDONS_DIR="$BUILD_DIR/addons"
-          mkdir -p "$USERDATA_DIR" "$ADDONS_DIR"
-
-          ADV_SRC="${{ github.workspace }}/kodi-config/advancedsettings.xml"
-          SRC_SRC="${{ github.workspace }}/kodi-config/sources.xml"
-          GUI_SRC="${{ github.workspace }}/kodi-config/guisettings.xml"
-
-          # Kodi runtime reads these from userdata, not from source-tree staging dirs.
-          if [ -f "$ADV_SRC" ]; then
-            cp "$ADV_SRC" "$USERDATA_DIR/advancedsettings.xml"
-            echo "✅ Injected userdata/advancedsettings.xml"
-          fi
-
-          if [ -f "$SRC_SRC" ]; then
-            cp "$SRC_SRC" "$USERDATA_DIR/sources.xml"
-            echo "✅ Injected userdata/sources.xml"
-          fi
-
-          if [ -f "$GUI_SRC" ]; then
-            cp "$GUI_SRC" "$USERDATA_DIR/guisettings.xml"
-            echo "✅ Injected userdata/guisettings.xml (custom file)"
-          elif [ -f "$HOME/kodi/system/userdata/guisettings.xml" ]; then
-            cp "$HOME/kodi/system/userdata/guisettings.xml" "$USERDATA_DIR/guisettings.xml"
-            echo "✅ Injected userdata/guisettings.xml (generated unknown_sources profile)"
-          fi
-
-          # Addons staged earlier into ~/kodi/addons; copy them into packaged assets tree.
-          if [ -d "$HOME/kodi/addons" ] && [ "$(ls -A "$HOME/kodi/addons" 2>/dev/null)" ]; then
-            cp -a "$HOME/kodi/addons/." "$ADDONS_DIR/"
-            echo "✅ Injected staged addons into build/addons"
-          fi
-
-          echo "Injected userdata files:"
-          ls -la "$USERDATA_DIR" || true
-
-      - name: Package APK
-        run: |
-          set -euo pipefail
-          # Per official Kodi Android docs, 'make apk' runs from the kodi source dir,
-          # NOT from the build dir. It invokes gradle in tools/android/packaging.
           KODI_SRC=$HOME/kodi
-          BUILD_DIR=$HOME/kodi-build
+          DEPENDS_PREFIX=$HOME/kodi-depends
+          TARGET_DIR="${{ steps.abi.outputs.target_dir }}"
+          PREFIX="$DEPENDS_PREFIX/$TARGET_DIR"
+          PACKAGING_DIR="$BUILD_DIR/tools/android/packaging"
+
           echo "📦 Packaging APK..."
 
           # Fail-safe: ensure Gradle's expected keystore exists at package time.
@@ -720,8 +698,53 @@ jobs:
                 > /dev/null 2>&1
             fi
           fi
-          ls -la ~/.android || true
 
+          # --- PHASE 1: Inject config into PREFIX share directory ---
+          # The 'make apk' → 'shared' target copies $(PREFIX)/share/kodi/* into
+          # the APK assets. By placing our custom files here BEFORE packaging,
+          # they flow through the standard pipeline into the APK.
+          SHARE_DIR="$PREFIX/share/kodi"
+
+          ADV_SRC="${{ github.workspace }}/kodi-config/advancedsettings.xml"
+          SRC_SRC="${{ github.workspace }}/kodi-config/sources.xml"
+          GUI_SRC="${{ github.workspace }}/kodi-config/guisettings.xml"
+
+          # userdata/ files: advancedsettings, sources, guisettings
+          if [ -d "$SHARE_DIR" ]; then
+            mkdir -p "$SHARE_DIR/userdata"
+
+            if [ -f "$ADV_SRC" ]; then
+              cp "$ADV_SRC" "$SHARE_DIR/userdata/advancedsettings.xml"
+              echo "✅ Injected advancedsettings.xml into PREFIX share"
+            fi
+
+            if [ -f "$SRC_SRC" ]; then
+              cp "$SRC_SRC" "$SHARE_DIR/userdata/sources.xml"
+              echo "✅ Injected sources.xml into PREFIX share"
+            fi
+
+            if [ -f "$GUI_SRC" ]; then
+              cp "$GUI_SRC" "$SHARE_DIR/userdata/guisettings.xml"
+              echo "✅ Injected custom guisettings.xml into PREFIX share"
+            elif [ -f "$HOME/kodi/system/userdata/guisettings.xml" ]; then
+              cp "$HOME/kodi/system/userdata/guisettings.xml" "$SHARE_DIR/userdata/guisettings.xml"
+              echo "✅ Injected generated guisettings.xml (unknown_sources) into PREFIX share"
+            fi
+
+            # Addons staged earlier into ~/kodi/addons
+            if [ -d "$HOME/kodi/addons" ] && [ "$(ls -A "$HOME/kodi/addons" 2>/dev/null)" ]; then
+              mkdir -p "$SHARE_DIR/addons"
+              cp -a "$HOME/kodi/addons/." "$SHARE_DIR/addons/"
+              echo "✅ Injected staged addons into PREFIX share"
+            fi
+
+            echo "PREFIX share userdata contents:"
+            ls -la "$SHARE_DIR/userdata/" || true
+          else
+            echo "⚠️ PREFIX share dir not found at $SHARE_DIR — will inject post-packaging"
+          fi
+
+          # --- PHASE 2: Run make apk ---
           cd "$KODI_SRC"
           make -C "$BUILD_DIR" apk 2>&1 | tee ~/apk-package.log
           # Also try the gradle path directly if make apk doesn't work
@@ -731,6 +754,44 @@ jobs:
             ./gradlew :xbmc:assembleRelease 2>&1 | tee -a ~/apk-package.log || \
             ./gradlew assembleRelease 2>&1 | tee -a ~/apk-package.log || true
           fi
+
+          # --- PHASE 3: Post-packaging injection (belt and suspenders) ---
+          # If Phase 1 didn't work (e.g. PREFIX path was wrong), inject directly
+          # into the packaging assets directory that gradle reads from.
+          ASSETS_DIR="$PACKAGING_DIR/xbmc/assets"
+          if [ -d "$ASSETS_DIR" ]; then
+            mkdir -p "$ASSETS_DIR/userdata"
+
+            if [ -f "$ADV_SRC" ] && [ ! -f "$ASSETS_DIR/userdata/advancedsettings.xml" ]; then
+              cp "$ADV_SRC" "$ASSETS_DIR/userdata/advancedsettings.xml"
+              echo "✅ Post-injected advancedsettings.xml into packaging assets"
+            fi
+            if [ -f "$SRC_SRC" ] && [ ! -f "$ASSETS_DIR/userdata/sources.xml" ]; then
+              cp "$SRC_SRC" "$ASSETS_DIR/userdata/sources.xml"
+              echo "✅ Post-injected sources.xml into packaging assets"
+            fi
+            # guisettings
+            if [ ! -f "$ASSETS_DIR/userdata/guisettings.xml" ]; then
+              if [ -f "$GUI_SRC" ]; then
+                cp "$GUI_SRC" "$ASSETS_DIR/userdata/guisettings.xml"
+              elif [ -f "$HOME/kodi/system/userdata/guisettings.xml" ]; then
+                cp "$HOME/kodi/system/userdata/guisettings.xml" "$ASSETS_DIR/userdata/guisettings.xml"
+              fi
+              echo "✅ Post-injected guisettings.xml into packaging assets"
+            fi
+            # addons
+            if [ -d "$HOME/kodi/addons" ] && [ "$(ls -A "$HOME/kodi/addons" 2>/dev/null)" ]; then
+              mkdir -p "$ASSETS_DIR/addons"
+              cp -a "$HOME/kodi/addons/." "$ASSETS_DIR/addons/"
+              echo "✅ Post-injected addons into packaging assets"
+            fi
+
+            echo "Final packaging assets userdata:"
+            ls -la "$ASSETS_DIR/userdata/" 2>/dev/null || echo "  (empty)"
+            echo "Final packaging assets addons:"
+            ls "$ASSETS_DIR/addons/" 2>/dev/null | head -10 || echo "  (none)"
+          fi
+
           echo "--- APK search after packaging ---"
           find ~ -name "*.apk" 2>/dev/null | grep -v ".gradle" | grep -v "/tmp/" | sort || echo "No APK found yet"
           echo "✅ Packaging step complete"
