@@ -615,6 +615,46 @@ jobs:
           fi
           echo "✅ Kodi compiled"
 
+      - name: Inject custom config into packaged build tree
+        run: |
+          set -euo pipefail
+          BUILD_DIR=$HOME/kodi-build
+          USERDATA_DIR="$BUILD_DIR/userdata"
+          ADDONS_DIR="$BUILD_DIR/addons"
+          mkdir -p "$USERDATA_DIR" "$ADDONS_DIR"
+
+          ADV_SRC="${{ github.workspace }}/kodi-config/advancedsettings.xml"
+          SRC_SRC="${{ github.workspace }}/kodi-config/sources.xml"
+          GUI_SRC="${{ github.workspace }}/kodi-config/guisettings.xml"
+
+          # Kodi runtime reads these from userdata, not from source-tree staging dirs.
+          if [ -f "$ADV_SRC" ]; then
+            cp "$ADV_SRC" "$USERDATA_DIR/advancedsettings.xml"
+            echo "✅ Injected userdata/advancedsettings.xml"
+          fi
+
+          if [ -f "$SRC_SRC" ]; then
+            cp "$SRC_SRC" "$USERDATA_DIR/sources.xml"
+            echo "✅ Injected userdata/sources.xml"
+          fi
+
+          if [ -f "$GUI_SRC" ]; then
+            cp "$GUI_SRC" "$USERDATA_DIR/guisettings.xml"
+            echo "✅ Injected userdata/guisettings.xml (custom file)"
+          elif [ -f "$HOME/kodi/system/userdata/guisettings.xml" ]; then
+            cp "$HOME/kodi/system/userdata/guisettings.xml" "$USERDATA_DIR/guisettings.xml"
+            echo "✅ Injected userdata/guisettings.xml (generated unknown_sources profile)"
+          fi
+
+          # Addons staged earlier into ~/kodi/addons; copy them into packaged assets tree.
+          if [ -d "$HOME/kodi/addons" ] && [ "$(ls -A "$HOME/kodi/addons" 2>/dev/null)" ]; then
+            cp -a "$HOME/kodi/addons/." "$ADDONS_DIR/"
+            echo "✅ Injected staged addons into build/addons"
+          fi
+
+          echo "Injected userdata files:"
+          ls -la "$USERDATA_DIR" || true
+
       - name: Package APK
         run: |
           set -euo pipefail
