@@ -73,6 +73,10 @@ jobs:
       - name: Checkout config repo
         uses: actions/checkout@v5
 
+      - name: Workflow revision marker
+        run: |
+          echo "WORKFLOW_REV=2026-05-04-keystore-failsafe-v2"
+
       - name: Diagnostic preflight
         if: github.event.inputs.debug_mode == 'true'
         run: |
