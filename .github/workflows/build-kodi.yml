@@ -386,9 +386,12 @@ jobs:
               # We use a targeted sed that only changes <default> within the
               # unknownsources setting block.
               sed -i '/<setting id="addons.unknownsources"/,/<\/setting>/ s|<default>false</default>|<default>true</default>|' "$SETTINGS_XML"
+              # Also change addons.updatemode from 0 (OFFICIAL_ONLY) to 1 (ANY_REPOSITORY)
+              # so that addons from third-party repos can receive updates.
+              sed -i '/<setting id="addons.updatemode"/,/<\/setting>/ s|<default>0</default>|<default>1</default>|' "$SETTINGS_XML"
               echo "Verification:"
-              grep -A 5 'addons.unknownsources' "$SETTINGS_XML" | head -8
-              echo "✅ Unknown sources: ENABLED (patched settings.xml default)"
+              grep -A 5 'addons.unknownsources\|addons.updatemode' "$SETTINGS_XML" | head -16
+              echo "✅ Unknown sources: ENABLED + Update mode: ANY_REPOSITORY"
             else
               echo "⚠️ settings.xml not found at $SETTINGS_XML"
             fi
@@ -811,6 +814,40 @@ jobs:
             ls -la "$ASSETS_DIR/userdata/" 2>/dev/null || echo "  (empty)"
             echo "addons/ (first 10):"
             ls "$ASSETS_DIR/addons/" 2>/dev/null | head -10 || echo "  (none)"
+
+            # --- Remove non-Android assets to trim APK size ---
+            # These files get bundled by the generic install_data globs but are
+            # not used on Android.
+            TRIMMED=0
+
+            # Desktop OpenGL shaders (Android uses GLES only)
+            if [ -d "$ASSETS_DIR/system/shaders/GL" ]; then
+              rm -rf "$ASSETS_DIR/system/shaders/GL"
+              echo "🗑️ Removed system/shaders/GL/ (desktop OpenGL — Android uses GLES)"
+              TRIMMED=1
+            fi
+
+            # Apple-specific keymaps
+            for f in customcontroller.AppleRemote.xml customcontroller.SiriRemote.xml; do
+              if [ -f "$ASSETS_DIR/system/keymaps/$f" ]; then
+                rm -f "$ASSETS_DIR/system/keymaps/$f"
+                echo "🗑️ Removed system/keymaps/$f"
+                TRIMMED=1
+              fi
+            done
+
+            # Linux-specific keymap device profiles (OSMC, WeTek, Nyxboard)
+            for d in nyxboard osmc osmcv3 wetek-play; do
+              if [ -d "$ASSETS_DIR/system/keymaps/$d" ]; then
+                rm -rf "$ASSETS_DIR/system/keymaps/$d"
+                echo "🗑️ Removed system/keymaps/$d/"
+                TRIMMED=1
+              fi
+            done
+
+            if [ "$TRIMMED" = "1" ]; then
+              NEEDS_REPACK=true
+            fi
 
             # Re-run gradle to rebuild the APK with injected files
             if [ "$NEEDS_REPACK" = "true" ]; then
