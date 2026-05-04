@@ -515,7 +515,8 @@ jobs:
           # We then use ENABLE_X=OFF for things we explicitly don't want.
           # NOTE: core_optional_dep respects ENABLE flags; core_require_dep ignores them.
           echo "Patching all core_require_dep → core_optional_dep in source tree..."
-          grep -rl "core_require_dep" . --include="*.cmake" --include="CMakeLists.txt" 2>/dev/null |             xargs -r sed -i 's/core_require_dep(/core_optional_dep(/g'
+          grep -rl "core_require_dep" . --include="*.cmake" --include="CMakeLists.txt" 2>/dev/null | \
+            xargs -r sed -i 's/core_require_dep(/core_optional_dep(/g'
           echo "Patch complete. Remaining core_require_dep calls:"
           grep -r "core_require_dep" . --include="*.cmake" --include="CMakeLists.txt" 2>/dev/null | head -5 || echo "  none"
 
@@ -546,7 +547,8 @@ jobs:
           KODI_CMAKE_ARGS="$KODI_CMAKE_ARGS -DENABLE_PIPEWIRE=OFF"
           KODI_CMAKE_ARGS="$KODI_CMAKE_ARGS -DENABLE_SMBCLIENT=OFF"
           set +e
-          make -C tools/depends/target/cmakebuildsys \
+          cd $HOME/kodi/tools/depends
+          make -C target/cmakebuildsys \
             CMAKE="$SYS_CMAKE" \
             BUILD_DIR="$BUILD_DIR" \
             CMAKE_EXTRA_ARGUMENTS="$KODI_CMAKE_ARGS" \
@@ -758,7 +760,7 @@ jobs:
           echo "apk_name=$OUT_NAME" >> $GITHUB_OUTPUT
 
       - name: Upload APK as artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.sign.outputs.apk_name }}
           path: ${{ steps.sign.outputs.apk_path }}
@@ -825,7 +827,7 @@ jobs:
 
       - name: Upload diagnostics artifact
         if: always() && github.event.inputs.debug_mode == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: kodi-build-diagnostics-${{ github.run_number }}
           path: /tmp/kodi-build-diagnostics.tgz
