@@ -236,6 +236,38 @@ jobs:
             grep -n 'cdioSupport.h\|MEDIA_DETECT\|HAS_OPTICAL_DRIVE' "$CDDB_HDR" | head -30 || true
           fi
 
+      - name: Patch Android platform to copy custom config from assets on first launch
+        run: |
+          set -euo pipefail
+          PLATFORM_CPP=~/kodi/xbmc/platform/android/PlatformAndroid.cpp
+          if [ ! -f "$PLATFORM_CPP" ]; then
+            echo "⚠️ PlatformAndroid.cpp not found — skipping"
+            exit 0
+          fi
+
+          # Add #include for CUtil (needed for CopyUserDataIfNeeded)
+          if ! grep -q 'Util.h' "$PLATFORM_CPP"; then
+            sed -i '/#include "ServiceBroker.h"/a #include "Util.h"' "$PLATFORM_CPP"
+          fi
+
+          # Inject CopyUserDataIfNeeded calls after the SSL_CERT_FILE setenv line.
+          # This mirrors what iOS does in PlatformDarwinEmbedded.cpp — copying
+          # bundled config files from APK assets (special://xbmc/userdata/) to the
+          # writable profile (special://masterprofile/) on first launch only.
+          MARKER='setenv("SSL_CERT_FILE"'
+          if grep -q "$MARKER" "$PLATFORM_CPP" && ! grep -q "CopyUserDataIfNeeded" "$PLATFORM_CPP"; then
+            sed -i "/$MARKER/a\\
+          \\
+            \/\/ Copy bundled userdata config files to profile on first launch\\
+            CUtil::CopyUserDataIfNeeded(\"special://masterprofile/\", \"advancedsettings.xml\");\\
+            CUtil::CopyUserDataIfNeeded(\"special://masterprofile/\", \"sources.xml\");\\
+            CUtil::CopyUserDataIfNeeded(\"special://masterprofile/\", \"guisettings.xml\");" "$PLATFORM_CPP"
+            echo "✅ Patched PlatformAndroid.cpp with CopyUserDataIfNeeded calls"
+          else
+            echo "ℹ️ PlatformAndroid.cpp already patched or marker not found"
+          fi
+          grep -n "CopyUserDataIfNeeded\|Util.h" "$PLATFORM_CPP" || true
+
       - name: Apply custom app name
         if: github.event.inputs.app_name != 'Kodi'
         run: |
@@ -335,29 +367,43 @@ jobs:
 
       - name: Bake in guisettings.xml (unknown sources + any user overrides)
         run: |
-          USERDATA_SRC="${{ github.workspace }}/kodi-config/guisettings.xml"
           UNKNOWN="${{ github.event.inputs.unknown_sources }}"
-          DEST=~/kodi/system/userdata/guisettings.xml
-          mkdir -p ~/kodi/system/userdata
 
-          # If the user has supplied their own full guisettings.xml, use it as base
-          if [ -f "$USERDATA_SRC" ]; then
-            cp "$USERDATA_SRC" "$DEST"
-            echo "📋 Using custom guisettings.xml as base"
+          # Kodi generates guisettings.xml from scratch on first launch using the
+          # default values defined in system/settings/settings.xml. It does NOT
+          # read a pre-shipped guisettings.xml from assets. So to pre-enable
+          # unknown sources, we patch the default value in the settings definition.
+          if [ "$UNKNOWN" = "true" ]; then
+            SETTINGS_XML=~/kodi/system/settings/settings.xml
+            if [ -f "$SETTINGS_XML" ]; then
+              # Change the default for addons.unknownsources from false to true.
+              # The setting block looks like:
+              #   <setting id="addons.unknownsources" type="boolean" ...>
+              #     ...
+              #     <default>false</default>
+              #     ...
+              #   </setting>
+              # We use a targeted sed that only changes <default> within the
+              # unknownsources setting block.
+              sed -i '/<setting id="addons.unknownsources"/,/<\/setting>/ s|<default>false</default>|<default>true</default>|' "$SETTINGS_XML"
+              echo "Verification:"
+              grep -A 5 'addons.unknownsources' "$SETTINGS_XML" | head -8
+              echo "✅ Unknown sources: ENABLED (patched settings.xml default)"
+            else
+              echo "⚠️ settings.xml not found at $SETTINGS_XML"
+            fi
           else
-            # Generate a minimal guisettings.xml with just the settings we need
-            printf '%s\n'               '<?xml version="1.0" encoding="utf-8"?>'               '<settings version="2">'               '  <setting id="general.addonupdates" default="true">1</setting>'               '  <setting id="addons.unknownsources" default="true">false_PLACEHOLDER</setting>'               '</settings>' > "$DEST"
+            echo "✅ Unknown sources: disabled (default)"
           fi
 
-          # Inject the unknown sources value
-          if [ "$UNKNOWN" = "true" ]; then
-            sed -i 's/false_PLACEHOLDER/true/' "$DEST"
-            # Also handle case where file already had the setting
-            sed -i 's|<setting id="addons.unknownsources"[^>]*>false</setting>|<setting id="addons.unknownsources" default="true">true</setting>|g' "$DEST"
-            echo "✅ Unknown sources: ENABLED"
-          else
-            sed -i 's/false_PLACEHOLDER/false/' "$DEST"
-            echo "✅ Unknown sources: disabled (default)"
+          # If the user has supplied a custom guisettings.xml, stage it for
+          # CopyUserDataIfNeeded — but note Kodi only auto-copies specific files
+          # (RssFeeds.xml, favourites.xml, Lircmap.xml), so this is best-effort.
+          USERDATA_SRC="${{ github.workspace }}/kodi-config/guisettings.xml"
+          if [ -f "$USERDATA_SRC" ]; then
+            mkdir -p ~/kodi/userdata
+            cp "$USERDATA_SRC" ~/kodi/userdata/guisettings.xml
+            echo "📋 Custom guisettings.xml staged in userdata/ (best-effort)"
           fi
 
       - name: Cache source tarballs
@@ -699,97 +745,82 @@ jobs:
             fi
           fi
 
-          # --- PHASE 1: Inject config into PREFIX share directory ---
-          # The 'make apk' → 'shared' target copies $(PREFIX)/share/kodi/* into
-          # the APK assets. By placing our custom files here BEFORE packaging,
-          # they flow through the standard pipeline into the APK.
-          SHARE_DIR="$PREFIX/share/kodi"
-
           ADV_SRC="${{ github.workspace }}/kodi-config/advancedsettings.xml"
           SRC_SRC="${{ github.workspace }}/kodi-config/sources.xml"
           GUI_SRC="${{ github.workspace }}/kodi-config/guisettings.xml"
+          ADDONS_STAGED="$HOME/kodi/addons"
 
-          # userdata/ files: advancedsettings, sources, guisettings
+          # --- PHASE 1: Inject config into PREFIX share BEFORE packaging ---
+          # The 'make apk' shared target copies $(PREFIX)/share/kodi/* into assets.
+          SHARE_DIR="$PREFIX/share/kodi"
           if [ -d "$SHARE_DIR" ]; then
             mkdir -p "$SHARE_DIR/userdata"
-
-            if [ -f "$ADV_SRC" ]; then
-              cp "$ADV_SRC" "$SHARE_DIR/userdata/advancedsettings.xml"
-              echo "✅ Injected advancedsettings.xml into PREFIX share"
-            fi
-
-            if [ -f "$SRC_SRC" ]; then
-              cp "$SRC_SRC" "$SHARE_DIR/userdata/sources.xml"
-              echo "✅ Injected sources.xml into PREFIX share"
-            fi
-
-            if [ -f "$GUI_SRC" ]; then
-              cp "$GUI_SRC" "$SHARE_DIR/userdata/guisettings.xml"
-              echo "✅ Injected custom guisettings.xml into PREFIX share"
-            elif [ -f "$HOME/kodi/system/userdata/guisettings.xml" ]; then
-              cp "$HOME/kodi/system/userdata/guisettings.xml" "$SHARE_DIR/userdata/guisettings.xml"
-              echo "✅ Injected generated guisettings.xml (unknown_sources) into PREFIX share"
-            fi
-
-            # Addons staged earlier into ~/kodi/addons
-            if [ -d "$HOME/kodi/addons" ] && [ "$(ls -A "$HOME/kodi/addons" 2>/dev/null)" ]; then
+            [ -f "$ADV_SRC" ] && cp "$ADV_SRC" "$SHARE_DIR/userdata/advancedsettings.xml" && echo "✅ Injected advancedsettings.xml into PREFIX share"
+            [ -f "$SRC_SRC" ] && cp "$SRC_SRC" "$SHARE_DIR/userdata/sources.xml" && echo "✅ Injected sources.xml into PREFIX share"
+            [ -f "$GUI_SRC" ] && cp "$GUI_SRC" "$SHARE_DIR/userdata/guisettings.xml" && echo "✅ Injected custom guisettings.xml into PREFIX share"
+            if [ -d "$ADDONS_STAGED" ] && [ "$(ls -A "$ADDONS_STAGED" 2>/dev/null)" ]; then
               mkdir -p "$SHARE_DIR/addons"
-              cp -a "$HOME/kodi/addons/." "$SHARE_DIR/addons/"
+              cp -a "$ADDONS_STAGED/." "$SHARE_DIR/addons/"
               echo "✅ Injected staged addons into PREFIX share"
             fi
-
             echo "PREFIX share userdata contents:"
             ls -la "$SHARE_DIR/userdata/" || true
           else
-            echo "⚠️ PREFIX share dir not found at $SHARE_DIR — will inject post-packaging"
+            echo "⚠️ PREFIX share dir not found at $SHARE_DIR"
           fi
 
-          # --- PHASE 2: Run make apk ---
+          # --- PHASE 2: Run make apk (bundle + shared + libs + python + java + gradle) ---
           cd "$KODI_SRC"
           make -C "$BUILD_DIR" apk 2>&1 | tee ~/apk-package.log
-          # Also try the gradle path directly if make apk doesn't work
-          if ! find ~ -name "*.apk" 2>/dev/null | grep -qv ".gradle"; then
-            echo "ℹ️ Trying gradle directly..."
-            cd "$KODI_SRC/tools/android/packaging"
-            ./gradlew :xbmc:assembleRelease 2>&1 | tee -a ~/apk-package.log || \
-            ./gradlew assembleRelease 2>&1 | tee -a ~/apk-package.log || true
-          fi
 
-          # --- PHASE 3: Post-packaging injection (belt and suspenders) ---
-          # If Phase 1 didn't work (e.g. PREFIX path was wrong), inject directly
-          # into the packaging assets directory that gradle reads from.
+          # --- PHASE 3: Force-inject into packaging assets and RE-RUN gradle ---
+          # make apk already ran gradle, but the assets may not have included our
+          # custom config if the cmake/bundle pipeline didn't pick them up.
+          # We inject directly into xbmc/assets/ and re-run gradle to rebuild
+          # the APK with the custom files included.
           ASSETS_DIR="$PACKAGING_DIR/xbmc/assets"
+          NEEDS_REPACK=false
+
           if [ -d "$ASSETS_DIR" ]; then
             mkdir -p "$ASSETS_DIR/userdata"
 
-            if [ -f "$ADV_SRC" ] && [ ! -f "$ASSETS_DIR/userdata/advancedsettings.xml" ]; then
-              cp "$ADV_SRC" "$ASSETS_DIR/userdata/advancedsettings.xml"
-              echo "✅ Post-injected advancedsettings.xml into packaging assets"
+            if [ -f "$ADV_SRC" ]; then
+              cp -f "$ADV_SRC" "$ASSETS_DIR/userdata/advancedsettings.xml"
+              echo "✅ Injected advancedsettings.xml into packaging assets"
+              NEEDS_REPACK=true
             fi
-            if [ -f "$SRC_SRC" ] && [ ! -f "$ASSETS_DIR/userdata/sources.xml" ]; then
-              cp "$SRC_SRC" "$ASSETS_DIR/userdata/sources.xml"
-              echo "✅ Post-injected sources.xml into packaging assets"
+            if [ -f "$SRC_SRC" ]; then
+              cp -f "$SRC_SRC" "$ASSETS_DIR/userdata/sources.xml"
+              echo "✅ Injected sources.xml into packaging assets"
+              NEEDS_REPACK=true
             fi
-            # guisettings
-            if [ ! -f "$ASSETS_DIR/userdata/guisettings.xml" ]; then
-              if [ -f "$GUI_SRC" ]; then
-                cp "$GUI_SRC" "$ASSETS_DIR/userdata/guisettings.xml"
-              elif [ -f "$HOME/kodi/system/userdata/guisettings.xml" ]; then
-                cp "$HOME/kodi/system/userdata/guisettings.xml" "$ASSETS_DIR/userdata/guisettings.xml"
-              fi
-              echo "✅ Post-injected guisettings.xml into packaging assets"
+            if [ -f "$GUI_SRC" ]; then
+              cp -f "$GUI_SRC" "$ASSETS_DIR/userdata/guisettings.xml"
+              echo "✅ Injected custom guisettings.xml into packaging assets"
+              NEEDS_REPACK=true
             fi
-            # addons
-            if [ -d "$HOME/kodi/addons" ] && [ "$(ls -A "$HOME/kodi/addons" 2>/dev/null)" ]; then
+            if [ -d "$ADDONS_STAGED" ] && [ "$(ls -A "$ADDONS_STAGED" 2>/dev/null)" ]; then
               mkdir -p "$ASSETS_DIR/addons"
-              cp -a "$HOME/kodi/addons/." "$ASSETS_DIR/addons/"
-              echo "✅ Post-injected addons into packaging assets"
+              cp -a "$ADDONS_STAGED/." "$ASSETS_DIR/addons/"
+              echo "✅ Injected staged addons into packaging assets"
+              NEEDS_REPACK=true
             fi
 
-            echo "Final packaging assets userdata:"
+            echo "--- Final packaging assets verification ---"
+            echo "userdata/:"
             ls -la "$ASSETS_DIR/userdata/" 2>/dev/null || echo "  (empty)"
-            echo "Final packaging assets addons:"
+            echo "addons/ (first 10):"
             ls "$ASSETS_DIR/addons/" 2>/dev/null | head -10 || echo "  (none)"
+
+            # Re-run gradle to rebuild the APK with injected files
+            if [ "$NEEDS_REPACK" = "true" ]; then
+              echo "🔄 Re-running gradle to include injected custom config..."
+              cd "$PACKAGING_DIR"
+              ANDROID_HOME="$ANDROID_SDK_ROOT" ./gradlew assembleRelease 2>&1 | tee -a ~/apk-package.log || \
+              ANDROID_HOME="$ANDROID_SDK_ROOT" ./gradlew assembleDebug 2>&1 | tee -a ~/apk-package.log || true
+            fi
+          else
+            echo "⚠️ Packaging assets dir not found at $ASSETS_DIR"
           fi
 
           echo "--- APK search after packaging ---"
