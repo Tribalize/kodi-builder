@@ -501,6 +501,7 @@ jobs:
           BUILD_DIR=$HOME/kodi-build
           DEPENDS_PREFIX=$HOME/kodi-depends
           NATIVE_BIN="$DEPENDS_PREFIX/x86_64-linux-gnu-native/bin"
+          SYS_CMAKE=$(which cmake)
           # Avoid stale cache/config interactions from prior attempts in same runner state
           rm -rf "$BUILD_DIR"
           mkdir -p "$BUILD_DIR"
@@ -546,6 +547,7 @@ jobs:
           KODI_CMAKE_ARGS="$KODI_CMAKE_ARGS -DENABLE_SMBCLIENT=OFF"
           set +e
           make -C tools/depends/target/cmakebuildsys \
+            CMAKE="$SYS_CMAKE" \
             BUILD_DIR="$BUILD_DIR" \
             CMAKE_EXTRA_ARGUMENTS="$KODI_CMAKE_ARGS" \
             2>&1 | tee ~/cmakebuildsys.log
