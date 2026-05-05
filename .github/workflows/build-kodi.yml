@@ -288,18 +288,50 @@ jobs:
         run: |
           ICON="${{ github.workspace }}/kodi-config/icon.png"
           if [ -f "$ICON" ]; then
-            echo "🖼️ Applying custom icon..."
-            # The APK packaging Makefile.in reads icons from media/drawable-*/
-            # in the packaging dir, NOT from xbmc/res/. It then copies them
-            # into xbmc/res/ during the 'res' target. So we must replace the
-            # source files in media/ to survive the packaging pipeline.
+            echo "🖼️ Applying custom icon to all branding images..."
+
+            # Install ImageMagick for resizing
+            sudo apt-get -qq install -y imagemagick > /dev/null 2>&1
+
+            # --- 1. Android launcher icons (res/drawable-*/) ---
             MEDIA=~/kodi/tools/android/packaging/media
-            for d in drawable-hdpi drawable-ldpi drawable-mdpi drawable-xhdpi drawable-xxhdpi drawable-xxxhdpi; do
+            declare -A LAUNCHER_SIZES=(
+              [drawable-ldpi]=36 [drawable-mdpi]=48 [drawable-hdpi]=72
+              [drawable-xhdpi]=96 [drawable-xxhdpi]=144 [drawable-xxxhdpi]=192
+            )
+            for d in "${!LAUNCHER_SIZES[@]}"; do
               if [ -d "$MEDIA/$d" ]; then
-                cp "$ICON" "$MEDIA/$d/ic_launcher.png"
+                convert "$ICON" -resize "${LAUNCHER_SIZES[$d]}x${LAUNCHER_SIZES[$d]}" "$MEDIA/$d/ic_launcher.png"
               fi
             done
-            echo "✅ Icon applied to all density buckets"
+            echo "  ✅ ic_launcher.png — all density buckets"
+
+            # --- 2. Android TV banner (drawable-xhdpi/banner.png) [320x180] ---
+            if [ -d "$MEDIA/drawable-xhdpi" ]; then
+              convert "$ICON" -resize 320x180 -background none -gravity center -extent 320x180 "$MEDIA/drawable-xhdpi/banner.png"
+              echo "  ✅ banner.png — Android TV banner"
+            fi
+
+            # --- 3. media/ icon files (bundled in APK assets) ---
+            for size in 16 32 48 80 120 256; do
+              convert "$ICON" -resize "${size}x${size}" ~/kodi/media/icon${size}x${size}.png
+            done
+            echo "  ✅ icon16-256.png — media icons"
+
+            # --- 4. media/banner.png [320x180] ---
+            convert "$ICON" -resize 320x180 -background none -gravity center -extent 320x180 ~/kodi/media/banner.png
+            echo "  ✅ banner.png — media banner"
+
+            # --- 5. media/vendor_icon.png [128x128] ---
+            convert "$ICON" -resize 128x128 ~/kodi/media/vendor_icon.png
+            echo "  ✅ vendor_icon.png"
+
+            # --- 6. media/vendor_logo.png [465x128] ---
+            # This is a wide logo. Center the icon on a transparent 465x128 canvas.
+            convert "$ICON" -resize 128x128 -background none -gravity center -extent 465x128 ~/kodi/media/vendor_logo.png
+            echo "  ✅ vendor_logo.png"
+
+            echo "✅ Custom icon applied to all branding images"
           else
             echo "ℹ️ No custom icon found (kodi-config/icon.png) — using default"
           fi
@@ -310,11 +342,12 @@ jobs:
           if [ -f "$SPLASH" ]; then
             echo "🖼️ Applying custom splash..."
             # Kodi has two splash images:
-            # 1. media/splash.jpg — the in-app splash shown by Kodi itself (bundled in assets)
-            # 2. media/applaunch_screen.png — the Android launch drawable (shown instantly by OS)
+            # 1. media/splash.jpg — the in-app splash shown by Kodi itself (bundled in assets) [1920x1080]
+            # 2. media/applaunch_screen.png — the Android launch drawable (shown instantly by OS) [1920x1080]
             # Both live in the source media/ dir and get packaged via different paths.
-            cp "$SPLASH" ~/kodi/media/splash.jpg
-            cp "$SPLASH" ~/kodi/media/applaunch_screen.png
+            # Resize to 1920x1080 and convert to proper formats.
+            convert "$SPLASH" -resize 1920x1080 -background black -gravity center -extent 1920x1080 ~/kodi/media/splash.jpg
+            convert "$SPLASH" -resize 1920x1080 -background black -gravity center -extent 1920x1080 ~/kodi/media/applaunch_screen.png
             echo "✅ Splash applied (both in-app and Android launch screen)"
           else
             echo "ℹ️ No custom splash found (kodi-config/splash.png) — using default"
