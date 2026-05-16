@@ -439,7 +439,8 @@ jobs:
             tail -5 "$INSTALL_ADDONS" 2>/dev/null
             echo "Source addons/ (custom):"
             for addon_dir in "$ADDON_STAGE"/*/; do
-              addon_id=$(basename "$addon_dir" 2>/dev/null)
+              [ -d "$addon_dir" ] || continue
+              addon_id=$(basename "$addon_dir")
               ls -d ~/kodi/addons/"$addon_id" 2>/dev/null && echo "  ✅ $addon_id present"
             done
           fi
