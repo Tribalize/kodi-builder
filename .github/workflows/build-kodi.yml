@@ -123,7 +123,7 @@ jobs:
             Piers)
               SOURCE_REF=master
               ADDON_CHANNEL=piers
-              ANDROID_PLATFORM=37
+              ANDROID_PLATFORM=37.0
               ANDROID_BUILD_TOOLS=37.0.0
               IS_PRERELEASE=true
               ;;
@@ -206,7 +206,7 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
-          packages: 'platforms;android-34 build-tools;34.0.0 platforms;android-37 build-tools;37.0.0 platform-tools'
+          packages: 'platforms;android-34 build-tools;34.0.0 platforms;android-37.0 build-tools;37.0.0 platform-tools'
 
       - name: Validate builder configuration
         run: python3 scripts/validate-kodi22-builder.py

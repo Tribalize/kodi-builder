@@ -47,11 +47,11 @@ def main() -> int:
     )
     check(
         "workflow",
-        "Piers resolves to rolling master and Android 37",
+        "Piers resolves to rolling master and Android 37.0",
         bool(
             re.search(
                 r"Piers\).*?SOURCE_REF=master.*?ADDON_CHANNEL=piers"
-                r".*?ANDROID_PLATFORM=37.*?ANDROID_BUILD_TOOLS=37\.0\.0"
+                r".*?ANDROID_PLATFORM=37\.0.*?ANDROID_BUILD_TOOLS=37\.0\.0"
                 r".*?IS_PRERELEASE=true",
                 workflow,
                 re.DOTALL,
@@ -60,9 +60,9 @@ def main() -> int:
     )
     check(
         "workflow",
-        "legacy Android 34 and Piers Android 37 SDKs are installed",
+        "legacy Android 34 and Piers Android 37.0 SDKs are installed",
         "platforms;android-34 build-tools;34.0.0" in workflow
-        and "platforms;android-37 build-tools;37.0.0" in workflow,
+        and "platforms;android-37.0 build-tools;37.0.0" in workflow,
     )
     check("workflow", "NDK r28c remains configured", "android-ndk-r28c" in workflow)
     check("workflow", "Java 17 remains configured", "java-version: '17'" in workflow)

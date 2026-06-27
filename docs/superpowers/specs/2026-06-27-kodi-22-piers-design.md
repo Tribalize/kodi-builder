@@ -20,7 +20,7 @@ The workflow will expose human-readable release choices and resolve them to buil
 
 | User choice | Upstream source ref | Addon channel | SDK/build-tools profile |
 | --- | --- | --- | --- |
-| Piers | `master` | `piers` | Android 37 / 37.0.0 |
+| Piers | `master` | `piers` | Android 37.0 / 37.0.0 |
 | Omega | `Omega` | `omega` | Existing compatible profile |
 | Nexus | `Nexus` | `nexus` | Existing compatible profile |
 | Matrix | `Matrix` | `matrix` | Existing compatible profile |
@@ -31,7 +31,7 @@ The workflow will expose human-readable release choices and resolve them to buil
 
 Add an early build-profile step that validates the selected release and publishes the source ref, addon channel, Android platform, and Android build-tools version as step outputs. Every downstream source, cache, signing, diagnostic, and release reference will use the appropriate resolved or display value rather than assuming the input is a literal Git branch.
 
-Install Android 34 and 37 SDK components so the retained legacy choices remain available while Piers can use the current upstream toolchain. Keep NDK r28c and Java 17, since those already match Kodi 22's documented requirements. Replace hard-coded build-tools 34 signing paths with the selected profile's build-tools path.
+Install Android 34 and 37.0 SDK components so the retained legacy choices remain available while Piers can use the current upstream toolchain. Keep NDK r28c and Java 17, since those already match Kodi 22's documented requirements. Replace hard-coded build-tools 34 signing paths with the selected profile's build-tools path.
 
 Record the checked-out source commit and a fingerprint of Kodi's `tools/depends` tree. Include that dependency fingerprint in the expensive depends-cache key so ordinary Kodi source changes can reuse compatible dependencies, while upstream dependency-definition changes automatically start a fresh cache. GitHub releases produced from the rolling Piers profile will be marked as prereleases; retained stable profiles will continue to create normal releases.
 
@@ -47,7 +47,7 @@ Add a repository-local validation script that checks the workflow and documentat
 
 - Piers is the default and maps to `master`.
 - Omega, Nexus, and Matrix remain selectable.
-- Kodi 22 selects Android platform 37 and build-tools 37.0.0.
+- Kodi 22 selects Android platform 37.0 and build-tools 37.0.0.
 - NDK r28c and Java 17 remain configured.
 - Signing uses the resolved build-tools path rather than a hard-coded 34.0.0 path.
 - The depends cache is keyed by the checked-out `tools/depends` fingerprint.
@@ -66,7 +66,7 @@ The test will be written and observed failing against the current repository bef
 ## Acceptance Criteria
 
 1. A default workflow dispatch clearly targets Kodi 22 Piers and checks out `xbmc/xbmc` `master`.
-2. The Piers profile uses the Android 37 toolchain documented by upstream.
+2. The Piers profile uses the Android 37.0 toolchain documented by upstream.
 3. Existing Omega, Nexus, and Matrix selections remain available.
 4. APK naming, cache keys, diagnostics, and release notes identify the selected Kodi release correctly.
 5. Repository documentation and examples describe Piers as the default prerelease target without calling it a stable release.
