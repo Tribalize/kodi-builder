@@ -14,14 +14,14 @@ on:
           - Nexus
           - Matrix
       abi:
-        description: 'Target device type'
+        description: 'Target device type (arm64-v8a recommended)'
         required: true
         default: 'arm64-v8a'
         type: choice
         options:
-          - arm64-v8a (modern phones/boxes — recommended)
-          - armeabi-v7a (older 32-bit devices)
-          - x86_64 (emulators / Chromebooks)
+          - arm64-v8a
+          - armeabi-v7a
+          - x86_64
       app_name:
         description: 'App display name (shown on launcher)'
         required: true

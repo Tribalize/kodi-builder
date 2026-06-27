@@ -47,6 +47,12 @@ def main() -> int:
     )
     check(
         "workflow",
+        "ABI default is an exact selectable value",
+        "        default: 'arm64-v8a'" in workflow
+        and "          - arm64-v8a\n" in workflow,
+    )
+    check(
+        "workflow",
         "Piers resolves to rolling master and Android 37.0",
         bool(
             re.search(
