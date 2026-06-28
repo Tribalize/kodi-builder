@@ -67,7 +67,7 @@ try {
 Write-Host ""
 Write-Host "Ready for local workflow test." -ForegroundColor Green
 Write-Host "Suggested command:"
-Write-Host "  act workflow_dispatch -W .github/workflows/build-kodi.yml -j build --container-architecture linux/amd64 --input branch=Omega --input abi=arm64-v8a --input app_name=Kodi --input package_id=org.xbmc.kodi --input apk_filename= --input unknown_sources=true --input create_release=false --input debug_mode=true"
+Write-Host "  act workflow_dispatch -W .github/workflows/build-kodi.yml -j build --container-architecture linux/amd64 --input branch=Piers --input abi=arm64-v8a --input app_name=Kodi --input package_id=org.xbmc.kodi --input apk_filename= --input unknown_sources=true --input create_release=false --input debug_mode=true"
 
 if ($RunAct) {
   Write-Host ""
@@ -76,7 +76,7 @@ if ($RunAct) {
     -W .github/workflows/build-kodi.yml `
     -j build `
     --container-architecture linux/amd64 `
-    --input branch=Omega `
+    --input branch=Piers `
     --input abi=arm64-v8a `
     --input app_name=Kodi `
     --input package_id=org.xbmc.kodi `

@@ -5,6 +5,9 @@
 > It is not actively maintained and may not receive continuous updates.
 > If you find issues, please fork this repository and fix them in your fork.
 
+> **Kodi 22 status**
+> `Piers` follows Kodi's moving `master` branch and is not a final release yet. Builds can change or temporarily break when upstream changes. Select `Omega` for the current stable Kodi 21 branch.
+
 ### Build a custom Kodi APK entirely in your browser — no software to install
 
 Everything happens on GitHub. You edit files here, click a button to build, and download the finished APK when it's ready.
@@ -26,7 +29,7 @@ In your fork, click the **Actions** tab → click **"I understand my workflows, 
 
 | Field | What to put |
 |-------|-------------|
-| Kodi version | `Omega` (latest stable) |
+| Kodi version | `Piers` — rolling Kodi 22 prerelease (default) |
 | Target device | `arm64-v8a` — works on most modern Android devices |
 | App display name | Leave as `Kodi` or type your custom name (shown under the launcher icon) |
 | Package ID | Leave as `org.xbmc.kodi` unless you want both official + custom installed |
@@ -63,7 +66,7 @@ Same as above but upload `splash.png` (1920×1080 recommended).
 ### Pre-install addons
 1. Open `kodi-config/addons.txt`
 2. Click the **pencil icon** to edit in browser
-3. Add one addon ZIP URL per line (find URLs at mirrors.kodi.tv/addons/omega/)
+3. Add one addon ZIP URL per line (find URLs at mirrors.kodi.tv/addons/piers/)
 4. Click **Commit changes**
 5. Trigger a new build — addons are baked in automatically
 
@@ -83,7 +86,7 @@ Edit `kodi-config/sources.xml` in GitHub and add entries to the `<files>` sectio
 | Type | Example path |
 |------|-------------|
 | HTTP addon repo | `https://example.com/kodi-repo/` |
-| HTTPS addon repo | `https://mirrors.kodi.tv/addons/omega/` |
+| HTTPS addon repo | `https://mirrors.kodi.tv/addons/piers/` |
 | SMB share (no auth) | `smb://192.168.1.100/shared/` |
 | SMB share (with login) | `smb://user:pass@192.168.1.100/private/` |
 | FTP server | `ftp://user:pass@ftp.example.com/path/` |
@@ -130,7 +133,7 @@ Edit `kodi-config/sources.xml` and add entries to the `<files>` section. The fil
 Yes — choose `armeabi-v7a` in the build form for 32-bit older devices.
 
 **How do I update to a newer Kodi version?**
-Just trigger a new build and choose the new branch. The APK will be rebuilt from the latest source.
+Trigger a new build and select the release you want. `Piers` follows the current Kodi 22 `master` branch, so later runs automatically pick up upstream prerelease changes. Omega, Nexus, and Matrix remain available for older builds.
 
 ---
 

@@ -4,24 +4,24 @@ on:
   workflow_dispatch:
     inputs:
       branch:
-        description: 'Kodi version to build'
+        description: 'Kodi release to build'
         required: true
-        default: 'Omega'
+        default: 'Piers'
         type: choice
         options:
+          - Piers
           - Omega
           - Nexus
           - Matrix
-          - master
       abi:
-        description: 'Target device type'
+        description: 'Target device type (arm64-v8a recommended)'
         required: true
         default: 'arm64-v8a'
         type: choice
         options:
-          - arm64-v8a (modern phones/boxes — recommended)
-          - armeabi-v7a (older 32-bit devices)
-          - x86_64 (emulators / Chromebooks)
+          - arm64-v8a
+          - armeabi-v7a
+          - x86_64
       app_name:
         description: 'App display name (shown on launcher)'
         required: true
@@ -113,6 +113,57 @@ jobs:
               echo "target_dir=x86_64-linux-android-24-release"  >> $GITHUB_OUTPUT ;;
           esac
 
+      - name: Resolve Kodi build profile
+        id: kodi
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE="${{ github.event.inputs.branch }}"
+          case "$RELEASE" in
+            Piers)
+              SOURCE_REF=master
+              ADDON_CHANNEL=piers
+              ANDROID_PLATFORM=37.0
+              ANDROID_BUILD_TOOLS=37.0.0
+              IS_PRERELEASE=true
+              ;;
+            Omega)
+              SOURCE_REF=Omega
+              ADDON_CHANNEL=omega
+              ANDROID_PLATFORM=34
+              ANDROID_BUILD_TOOLS=34.0.0
+              IS_PRERELEASE=false
+              ;;
+            Nexus)
+              SOURCE_REF=Nexus
+              ADDON_CHANNEL=nexus
+              ANDROID_PLATFORM=34
+              ANDROID_BUILD_TOOLS=34.0.0
+              IS_PRERELEASE=false
+              ;;
+            Matrix)
+              SOURCE_REF=Matrix
+              ADDON_CHANNEL=matrix
+              ANDROID_PLATFORM=34
+              ANDROID_BUILD_TOOLS=34.0.0
+              IS_PRERELEASE=false
+              ;;
+            *)
+              echo "Unsupported Kodi release: $RELEASE" >&2
+              exit 1
+              ;;
+          esac
+          {
+            echo "release=$RELEASE"
+            echo "source_ref=$SOURCE_REF"
+            echo "addon_channel=$ADDON_CHANNEL"
+            echo "android_platform=$ANDROID_PLATFORM"
+            echo "android_build_tools=$ANDROID_BUILD_TOOLS"
+            echo "is_prerelease=$IS_PRERELEASE"
+          } >> "$GITHUB_OUTPUT"
+          echo "Kodi $RELEASE -> xbmc/xbmc $SOURCE_REF"
+          echo "Android platform $ANDROID_PLATFORM / build-tools $ANDROID_BUILD_TOOLS"
+
       - name: Install build dependencies
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -155,31 +206,41 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
-          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
+          packages: 'platforms;android-34 build-tools;34.0.0 platforms;android-37.0 build-tools;37.0.0 platform-tools'
+
+      - name: Validate builder configuration
+        run: python3 scripts/validate-kodi22-builder.py
 
       - name: Cache Kodi source
         uses: actions/cache@v5
         with:
           path: ~/kodi
-          key: kodi-src-${{ github.event.inputs.branch }}-${{ hashFiles('.github/workflows/build-kodi.yml') }}
+          key: kodi-src-${{ steps.kodi.outputs.source_ref }}-${{ hashFiles('.github/workflows/build-kodi.yml') }}
 
       - name: Clone / update Kodi source
+        id: source
         run: |
           set -euo pipefail
+          SOURCE_REF="${{ steps.kodi.outputs.source_ref }}"
           if [ -d ~/kodi/.git ]; then
             echo "📦 Updating existing source..."
-            git -C ~/kodi fetch origin
-            git -C ~/kodi checkout ${{ github.event.inputs.branch }}
+            git -C ~/kodi fetch origin "$SOURCE_REF"
+            git -C ~/kodi checkout "$SOURCE_REF"
             # Ensure cached source is deterministic and not carrying prior run patches
-            git -C ~/kodi reset --hard "origin/${{ github.event.inputs.branch }}"
+            git -C ~/kodi reset --hard "origin/$SOURCE_REF"
             git -C ~/kodi clean -fd
           else
-            echo "📦 Cloning Kodi ${{ github.event.inputs.branch }}..."
+            echo "📦 Cloning Kodi $SOURCE_REF..."
             git clone --depth=1 \
-              -b ${{ github.event.inputs.branch }} \
+              -b "$SOURCE_REF" \
               https://github.com/xbmc/xbmc ~/kodi
           fi
-          echo "✅ Source ready ($(git -C ~/kodi rev-parse --short HEAD))"
+          SOURCE_SHA=$(git -C ~/kodi rev-parse HEAD)
+          DEPENDS_FINGERPRINT=$(git -C ~/kodi ls-tree -r HEAD tools/depends | sha256sum | cut -d' ' -f1)
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "depends_fingerprint=$DEPENDS_FINGERPRINT" >> "$GITHUB_OUTPUT"
+          echo "✅ Source ready (${SOURCE_SHA:0:12})"
+          echo "Depends fingerprint: $DEPENDS_FINGERPRINT"
 
       - name: Patch Android looper API for newer NDK
         run: |
@@ -514,14 +575,14 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/kodi-tarballs
-          key: kodi-tarballs-${{ github.event.inputs.branch }}-v1
+          key: kodi-tarballs-${{ steps.kodi.outputs.source_ref }}-v1
 
       - name: Cache Kodi depends
         id: depends-cache
         uses: actions/cache@v5
         with:
           path: ~/kodi-depends
-          key: kodi-depends-${{ github.event.inputs.branch }}-${{ steps.abi.outputs.value }}-v20
+          key: kodi-depends-${{ steps.kodi.outputs.source_ref }}-${{ steps.source.outputs.depends_fingerprint }}-${{ steps.abi.outputs.value }}-v21
 
       - name: Configure and build Kodi depends
         run: |
@@ -1043,9 +1104,10 @@ jobs:
           OUT_NAME="${SAFE_NAME}.apk"
           OUT="/tmp/$OUT_NAME"
           ALIGNED="/tmp/aligned.apk"
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/${{ steps.kodi.outputs.android_build_tools }}"
 
-          $ANDROID_HOME/build-tools/34.0.0/zipalign -v 4 "$APK" "$ALIGNED"
-          $ANDROID_HOME/build-tools/34.0.0/apksigner sign \
+          "$BUILD_TOOLS/zipalign" -v 4 "$APK" "$ALIGNED"
+          "$BUILD_TOOLS/apksigner" sign \
             --ks ~/.android/kodi.keystore \
             --ks-key-alias kodi \
             --ks-pass pass:android \
@@ -1076,7 +1138,9 @@ jobs:
 
             | Setting | Value |
             |---------|-------|
-            | Kodi branch | `${{ github.event.inputs.branch }}` |
+            | Kodi release | `${{ steps.kodi.outputs.release }}` |
+            | Source ref | `${{ steps.kodi.outputs.source_ref }}` (`${{ steps.source.outputs.source_sha }}`) |
+            | Addon channel | `${{ steps.kodi.outputs.addon_channel }}` |
             | App name | ${{ github.event.inputs.app_name }} |
             | APK filename | `${{ steps.sign.outputs.apk_name }}` |
             | Package ID | `${{ github.event.inputs.package_id }}` |
@@ -1093,7 +1157,7 @@ jobs:
             > Built automatically by GitHub Actions from [xbmc/xbmc](https://github.com/xbmc/xbmc)
           files: ${{ steps.sign.outputs.apk_path }}
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.kodi.outputs.is_prerelease == 'true' }}
 
       - name: Collect diagnostic bundle
         if: always() && github.event.inputs.debug_mode == 'true'
@@ -1108,6 +1172,13 @@ jobs:
           cp -f ~/apk-package.log "$OUT/" 2>/dev/null || true
           {
             echo "branch=${{ github.event.inputs.branch }}"
+            echo "release=${{ steps.kodi.outputs.release }}"
+            echo "source_ref=${{ steps.kodi.outputs.source_ref }}"
+            echo "source_sha=${{ steps.source.outputs.source_sha }}"
+            echo "depends_fingerprint=${{ steps.source.outputs.depends_fingerprint }}"
+            echo "addon_channel=${{ steps.kodi.outputs.addon_channel }}"
+            echo "android_platform=${{ steps.kodi.outputs.android_platform }}"
+            echo "android_build_tools=${{ steps.kodi.outputs.android_build_tools }}"
             echo "abi=${{ github.event.inputs.abi }}"
             echo "run_id=${{ github.run_id }}"
             echo "run_number=${{ github.run_number }}"

@@ -79,10 +79,10 @@
          up in File Manager ready to install from.
          Examples shown below — uncomment the ones you want.           -->
 
-    <!-- Kodi official repo mirror (useful reference)
+    <!-- Kodi official Piers repo mirror (Kodi 22 prerelease)
     <source>
-      <name>Kodi Omega Repo</name>
-      <path pathversion="1">https://mirrors.kodi.tv/addons/omega/</path>
+      <name>Kodi Piers Repo</name>
+      <path pathversion="1">https://mirrors.kodi.tv/addons/piers/</path>
       <allowsharing>true</allowsharing>
     </source>
     -->
